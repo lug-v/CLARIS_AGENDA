@@ -1,4 +1,4 @@
-const CACHE_NAME = "clari-pwa-v1";
+const CACHE_NAME = "clari-pwa-v2";
 const APP_SHELL = [
   "/",
   "/manifest.webmanifest",

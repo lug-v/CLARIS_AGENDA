@@ -30,6 +30,7 @@ Crie `.env.local` usando `.env.example` como referência:
 
 ```env
 GROQ_API_KEY=sua_chave_da_groq
+DATABASE_URL=postgresql://usuario:senha@host/neondb?sslmode=require
 ```
 
 Inicie o projeto:
@@ -39,6 +40,12 @@ npm run dev
 ```
 
 A chave da Groq nunca deve ser adicionada ao GitHub. Arquivos `.env*` são ignorados, com exceção do modelo seguro `.env.example`.
+
+## Banco de dados
+
+A Clari usa PostgreSQL com o driver serverless do Neon. Na Vercel, conecte uma integração Neon ao projeto ou defina `DATABASE_URL` em **Settings → Environment Variables**. A tabela e o índice da agenda são criados automaticamente na primeira requisição.
+
+Enquanto não houver login, cada navegador recebe um identificador protegido por cookie e enxerga apenas os próprios compromissos. Limpar os cookies cria uma agenda nova; o vínculo entre aparelhos será adicionado junto da autenticação e do Telegram.
 
 ## Tecnologias
 
