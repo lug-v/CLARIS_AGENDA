@@ -22,6 +22,11 @@ type AgendaEvent = {
   location: string;
   notes: string;
 };
+type TelegramStatus = {
+  configured: boolean;
+  connected: boolean;
+  username: string;
+};
 
 function localDateKey(date: Date) {
   const year = date.getFullYear();
@@ -54,6 +59,9 @@ export default function Home() {
   const [listening, setListening] = useState(false);
   const [message, setMessage] = useState("");
   const [databaseMessage, setDatabaseMessage] = useState("");
+  const [telegramStatus, setTelegramStatus] = useState<TelegramStatus | null>(null);
+  const [telegramLink, setTelegramLink] = useState("");
+  const [telegramLoading, setTelegramLoading] = useState(false);
   const recorder = useRef<MediaRecorder | null>(null);
   const chunks = useRef<Blob[]>([]);
 
@@ -99,6 +107,33 @@ export default function Home() {
       active = false;
     };
   }, [selectedDate]);
+
+  const refreshTelegramStatus = useCallback(async () => {
+    const response = await fetch("/api/telegram/status", { cache: "no-store" });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Não foi possível consultar o Telegram.");
+    setTelegramStatus(data);
+    if (data.connected) setTelegramLink("");
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    fetch("/api/telegram/status", { cache: "no-store" })
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) throw new Error();
+        return data as TelegramStatus;
+      })
+      .then((status) => {
+        if (active) setTelegramStatus(status);
+      })
+      .catch(() => {
+        if (active) setTelegramStatus(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   async function analyze(payload: BodyInit, headers?: HeadersInit) {
     setLoading(true);
@@ -206,6 +241,35 @@ export default function Home() {
     setSelectedDate(localDateKey(nextDate));
   }
 
+  async function createTelegramLink() {
+    setTelegramLoading(true);
+    setMessage("");
+    try {
+      const response = await fetch("/api/telegram/link", { method: "POST" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Não foi possível conectar o Telegram.");
+      setTelegramLink(data.url);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível conectar o Telegram.");
+    } finally {
+      setTelegramLoading(false);
+    }
+  }
+
+  async function disconnectTelegram() {
+    setTelegramLoading(true);
+    try {
+      const response = await fetch("/api/telegram/disconnect", { method: "POST" });
+      if (!response.ok) throw new Error();
+      setTelegramStatus((current) => current ? { ...current, connected: false, username: "" } : current);
+      setTelegramLink("");
+    } catch {
+      setMessage("Não foi possível desconectar o Telegram.");
+    } finally {
+      setTelegramLoading(false);
+    }
+  }
+
   return (
     <main className="app-shell">
       <aside className="sidebar">
@@ -254,6 +318,30 @@ export default function Home() {
             </div>
             <div className="review-actions"><button onClick={() => setDraft(null)}>Cancelar</button><button className="confirm" disabled={saving} onClick={confirmEvent}>{saving ? "Salvando..." : "✓ Confirmar e agendar"}</button></div>
           </section>}
+        </section>
+
+        <section className="integration-card" id="integrations">
+          <div className="telegram-icon">➤</div>
+          <div className="integration-copy">
+            <h2>Telegram</h2>
+            <p>
+              {telegramStatus?.connected
+                ? `Conectado${telegramStatus.username ? ` a @${telegramStatus.username}` : ""}. Envie texto, áudio ou foto ao bot.`
+                : "Envie compromissos ao bot e confirme antes de salvar na Clari."}
+            </p>
+          </div>
+          <div className="integration-actions">
+            {telegramStatus?.connected ? <>
+              <span className="connected-badge">● Conectado</span>
+              <button disabled={telegramLoading} onClick={disconnectTelegram}>Desconectar</button>
+            </> : <>
+              {!telegramLink && <button className="telegram-connect" disabled={telegramLoading || telegramStatus?.configured === false} onClick={createTelegramLink}>
+                {telegramLoading ? "Gerando link..." : telegramStatus?.configured === false ? "Aguardando configuração" : "Conectar Telegram"}
+              </button>}
+              {telegramLink && <a className="telegram-connect" href={telegramLink} target="_blank" rel="noreferrer">Abrir bot no Telegram</a>}
+              {telegramLink && <button disabled={telegramLoading} onClick={() => void refreshTelegramStatus()}>Atualizar status</button>}
+            </>}
+          </div>
         </section>
 
         <div className="agenda-heading">

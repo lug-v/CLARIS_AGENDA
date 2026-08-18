@@ -1,10 +1,10 @@
 import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 import { ensureDatabaseSchema, getDatabase } from "@/lib/db";
+import { attachOwnerCookie, getOwnerId, OWNER_COOKIE } from "@/lib/device";
 
 export const runtime = "nodejs";
 
-const OWNER_COOKIE = "clari_device_id";
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
 
@@ -27,24 +27,6 @@ function isValidDate(value: string) {
   const [year, month, day] = value.split("-").map(Number);
   const parsed = new Date(Date.UTC(year, month - 1, day));
   return parsed.getUTCFullYear() === year && parsed.getUTCMonth() === month - 1 && parsed.getUTCDate() === day;
-}
-
-function getOwnerId(currentValue?: string) {
-  if (currentValue && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(currentValue)) return currentValue;
-  return crypto.randomUUID();
-}
-
-function attachOwnerCookie(response: NextResponse, ownerId: string, hadCookie: boolean) {
-  if (!hadCookie) {
-    response.cookies.set(OWNER_COOKIE, ownerId, {
-      httpOnly: true,
-      sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
-      maxAge: 60 * 60 * 24 * 365 * 2,
-      path: "/",
-    });
-  }
-  return response;
 }
 
 function databaseError(error: unknown) {
