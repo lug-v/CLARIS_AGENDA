@@ -8,7 +8,15 @@ Agenda web que transforma texto, gravações de voz e fotos em compromissos estr
 - transcrição de áudio em português com Whisper;
 - leitura de fotos e páginas de agenda;
 - revisão de título, data, horários e local;
-- interface responsiva para computador e celular.
+- interface responsiva para computador e celular;
+- instalação como aplicativo (PWA) em Android, iPhone e computador.
+
+## Instalar no celular
+
+- **Android (Chrome):** abra o site, toque no menu e escolha **Instalar app** ou **Adicionar à tela inicial**.
+- **iPhone (Safari):** abra o site, toque em **Compartilhar** e escolha **Adicionar à Tela de Início**.
+
+Depois de instalada, a Clari abre em uma janela própria e fica disponível pelo ícone na tela inicial.
 
 ## Executar localmente
 
