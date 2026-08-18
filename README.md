@@ -34,4 +34,4 @@ A chave da Groq nunca deve ser adicionada ao GitHub. Arquivos `.env*` são ignor
 
 ## Tecnologias
 
-React, TypeScript, vinext, Cloudflare Workers e Groq API.
+Next.js, React, TypeScript, Vercel e Groq API.
