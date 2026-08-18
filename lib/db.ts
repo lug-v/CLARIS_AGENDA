@@ -22,6 +22,7 @@ export function ensureDatabaseSchema() {
           owner_id UUID NOT NULL,
           title VARCHAR(160) NOT NULL,
           event_date DATE NOT NULL,
+          end_date DATE,
           start_time TIME NOT NULL,
           end_time TIME,
           location VARCHAR(240) NOT NULL DEFAULT '',
@@ -31,6 +32,8 @@ export function ensureDatabaseSchema() {
           updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
       `;
+      await sql`ALTER TABLE agenda_events ADD COLUMN IF NOT EXISTS end_date DATE`;
+      await sql`UPDATE agenda_events SET end_date = event_date WHERE end_date IS NULL`;
       await sql`
         CREATE INDEX IF NOT EXISTS agenda_events_owner_date_idx
         ON agenda_events (owner_id, event_date, start_time)
@@ -60,6 +63,7 @@ export function ensureDatabaseSchema() {
           owner_id UUID NOT NULL,
           title VARCHAR(160) NOT NULL,
           event_date DATE NOT NULL,
+          end_date DATE,
           start_time TIME NOT NULL,
           end_time TIME,
           location VARCHAR(240) NOT NULL DEFAULT '',
@@ -70,6 +74,8 @@ export function ensureDatabaseSchema() {
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
       `;
+      await sql`ALTER TABLE telegram_pending_events ADD COLUMN IF NOT EXISTS end_date DATE`;
+      await sql`UPDATE telegram_pending_events SET end_date = event_date WHERE end_date IS NULL`;
       await sql`
         CREATE TABLE IF NOT EXISTS telegram_updates (
           update_id BIGINT PRIMARY KEY,
