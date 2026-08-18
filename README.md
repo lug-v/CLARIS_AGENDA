@@ -47,6 +47,23 @@ A Clari usa PostgreSQL com o driver serverless do Neon. Na Vercel, conecte uma i
 
 Enquanto não houver login, cada navegador recebe um identificador protegido por cookie e enxerga apenas os próprios compromissos. Limpar os cookies cria uma agenda nova; o vínculo entre aparelhos será adicionado junto da autenticação e do Telegram.
 
+## Telegram
+
+Crie um bot pelo `@BotFather` com o comando `/newbot`. Guarde o token como senha e configure na Vercel:
+
+```env
+TELEGRAM_BOT_TOKEN=token_fornecido_pelo_botfather
+APP_URL=https://claris-agenda.vercel.app
+```
+
+O webhook é registrado automaticamente ao gerar o primeiro link de conexão. Para registro manual durante o desenvolvimento, use os mesmos valores em `.env.local` e execute:
+
+```bash
+npm run telegram:setup
+```
+
+Na Clari, gere um link temporário para vincular a conversa. O bot aceita texto, áudio e foto, mostra os dados interpretados e só salva após a confirmação do usuário. O comando `/agenda` lista os compromissos do dia.
+
 ## Tecnologias
 
 Next.js, React, TypeScript, Vercel e Groq API.

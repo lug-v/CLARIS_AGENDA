@@ -9,6 +9,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "telegram:setup": "node --env-file=.env.local scripts/setup-telegram.mjs",
     "test": "next build",
     "lint": "eslint . --ignore-pattern .next"
   },

@@ -1,0 +1,92 @@
+.integration-card {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  margin-top: 18px;
+  padding: 17px 20px;
+  border: 1px solid #dfe5ef;
+  border-radius: 13px;
+  background: #fbfcff;
+}
+
+.telegram-icon {
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #2aabee;
+  color: white;
+  font-size: 19px;
+  transform: rotate(-20deg);
+}
+
+.integration-copy {
+  flex: 1;
+}
+
+.integration-copy h2 {
+  margin: 0;
+  font: 700 15px Manrope;
+}
+
+.integration-copy p {
+  margin: 4px 0 0;
+  color: #8792a4;
+  font-size: 12px;
+}
+
+.integration-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.integration-actions button,
+.telegram-connect {
+  padding: 9px 13px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.integration-actions button {
+  border: 1px solid #dfe5ef;
+  background: white;
+}
+
+.integration-actions button:disabled {
+  cursor: not-allowed;
+  opacity: .6;
+}
+
+.telegram-connect {
+  border: 0 !important;
+  background: #2aabee !important;
+  color: white;
+}
+
+.connected-badge {
+  color: #23875b;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+@media (max-width: 760px) {
+  .integration-card {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .integration-copy {
+    min-width: calc(100% - 60px);
+  }
+
+  .integration-actions {
+    width: 100%;
+    flex-wrap: wrap;
+    padding-left: 57px;
+  }
+}
