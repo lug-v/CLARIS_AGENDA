@@ -40,7 +40,7 @@ function dateFromKey(value: string) {
 }
 
 async function requestEvents(date: string): Promise<AgendaEvent[]> {
-  const response = await fetch(`/api/events?date=${encodeURIComponent(date)}`, { cache: "no-store" });
+  const response = await fetch(`/api/events?month=${encodeURIComponent(date)}`, { cache: "no-store" });
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || "Não foi possível carregar a agenda.");
   return data.events;
@@ -49,8 +49,9 @@ async function requestEvents(date: string): Promise<AgendaEvent[]> {
 export default function Home() {
   const today = useMemo(() => localDateKey(new Date()), []);
   const [selectedDate, setSelectedDate] = useState(today);
+  const [visibleMonth, setVisibleMonth] = useState(today.slice(0, 7));
   const [mode, setMode] = useState<Mode>("voice");
-  const [events, setEvents] = useState<AgendaEvent[]>([]);
+  const [monthEvents, setMonthEvents] = useState<AgendaEvent[]>([]);
   const [text, setText] = useState("");
   const [draft, setDraft] = useState<EventDraft | null>(null);
   const [loading, setLoading] = useState(false);
@@ -66,6 +67,33 @@ export default function Home() {
   const chunks = useRef<Blob[]>([]);
 
   const visibleDate = useMemo(() => dateFromKey(selectedDate), [selectedDate]);
+  const events = useMemo(
+    () => monthEvents.filter((event) => event.date === selectedDate),
+    [monthEvents, selectedDate],
+  );
+  const calendarDays = useMemo(() => {
+    const [year, month] = visibleMonth.split("-").map(Number);
+    const firstDay = new Date(year, month - 1, 1, 12);
+    const gridStart = new Date(firstDay);
+    gridStart.setDate(firstDay.getDate() - firstDay.getDay());
+    const eventsByDate = new Map<string, AgendaEvent[]>();
+    monthEvents.forEach((event) => {
+      const dayEvents = eventsByDate.get(event.date) || [];
+      dayEvents.push(event);
+      eventsByDate.set(event.date, dayEvents);
+    });
+    return Array.from({ length: 42 }, (_, index) => {
+      const date = new Date(gridStart);
+      date.setDate(gridStart.getDate() + index);
+      const key = localDateKey(date);
+      return {
+        key,
+        day: date.getDate(),
+        currentMonth: date.getMonth() === month - 1,
+        events: eventsByDate.get(key) || [],
+      };
+    });
+  }, [monthEvents, visibleMonth]);
   const weekdayLabel = visibleDate
     .toLocaleDateString("pt-BR", { weekday: "long", day: "numeric", month: "long" })
     .toUpperCase();
@@ -73,14 +101,19 @@ export default function Home() {
     .toLocaleDateString("pt-BR", { month: "short" })
     .replace(".", "")
     .toUpperCase();
+  const rawCalendarMonthLabel = dateFromKey(`${visibleMonth}-01`).toLocaleDateString("pt-BR", {
+    month: "long",
+    year: "numeric",
+  });
+  const calendarMonthLabel = rawCalendarMonthLabel.charAt(0).toUpperCase() + rawCalendarMonthLabel.slice(1);
 
-  const loadEvents = useCallback(async (date: string) => {
+  const loadEvents = useCallback(async (month: string) => {
     setEventsLoading(true);
     setDatabaseMessage("");
     try {
-      setEvents(await requestEvents(date));
+      setMonthEvents(await requestEvents(month));
     } catch (error) {
-      setEvents([]);
+      setMonthEvents([]);
       setDatabaseMessage(error instanceof Error ? error.message : "Não foi possível carregar a agenda.");
     } finally {
       setEventsLoading(false);
@@ -89,15 +122,15 @@ export default function Home() {
 
   useEffect(() => {
     let active = true;
-    requestEvents(selectedDate)
+    requestEvents(visibleMonth)
       .then((loadedEvents) => {
         if (!active) return;
-        setEvents(loadedEvents);
+        setMonthEvents(loadedEvents);
         setDatabaseMessage("");
       })
       .catch((error: unknown) => {
         if (!active) return;
-        setEvents([]);
+        setMonthEvents([]);
         setDatabaseMessage(error instanceof Error ? error.message : "Não foi possível carregar a agenda.");
       })
       .finally(() => {
@@ -106,7 +139,7 @@ export default function Home() {
     return () => {
       active = false;
     };
-  }, [selectedDate]);
+  }, [visibleMonth]);
 
   const refreshTelegramStatus = useCallback(async () => {
     const response = await fetch("/api/telegram/status", { cache: "no-store" });
@@ -219,7 +252,8 @@ export default function Home() {
       setDraft(null);
       setText("");
       setSelectedDate(data.event.date);
-      await loadEvents(data.event.date);
+      setVisibleMonth(data.event.date.slice(0, 7));
+      await loadEvents(data.event.date.slice(0, 7));
       setMessage("Compromisso salvo na sua agenda.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Não foi possível salvar o compromisso.");
@@ -237,8 +271,30 @@ export default function Home() {
   function moveSelectedDate(days: number) {
     const nextDate = dateFromKey(selectedDate);
     nextDate.setDate(nextDate.getDate() + days);
+    const nextKey = localDateKey(nextDate);
+    if (nextKey.slice(0, 7) !== visibleMonth) {
+      setEventsLoading(true);
+      setVisibleMonth(nextKey.slice(0, 7));
+    }
+    setSelectedDate(nextKey);
+  }
+
+  function moveVisibleMonth(months: number) {
+    const [year, month] = visibleMonth.split("-").map(Number);
+    const nextMonthDate = new Date(year, month - 1 + months, 1, 12);
+    const nextMonth = localDateKey(nextMonthDate).slice(0, 7);
     setEventsLoading(true);
-    setSelectedDate(localDateKey(nextDate));
+    setVisibleMonth(nextMonth);
+    setSelectedDate(today.startsWith(nextMonth) ? today : `${nextMonth}-01`);
+  }
+
+  function selectCalendarDate(date: string) {
+    setSelectedDate(date);
+    const month = date.slice(0, 7);
+    if (month !== visibleMonth) {
+      setEventsLoading(true);
+      setVisibleMonth(month);
+    }
   }
 
   async function createTelegramLink() {
@@ -285,7 +341,7 @@ export default function Home() {
       <section className="workspace">
         <header className="topbar">
           <div><p>{weekdayLabel}</p><h1>Bom dia, Lucas <span>☀</span></h1></div>
-          <button className="outline-button" onClick={() => { setEventsLoading(true); setSelectedDate(today); }}>Hoje</button>
+          <button className="outline-button" onClick={() => { setEventsLoading(true); setVisibleMonth(today.slice(0, 7)); setSelectedDate(today); }}>Hoje</button>
           <button className="icon-button" aria-label="Notificações">♢</button>
         </header>
 
@@ -345,10 +401,42 @@ export default function Home() {
         </section>
 
         <div className="agenda-heading">
-          <div><h2>Sua agenda</h2><p>{events.length} {events.length === 1 ? "compromisso" : "compromissos"} nesta data</p></div>
+          <div><h2><span className="calendar-heading-prefix">Calendário de </span>{calendarMonthLabel}</h2><p>{monthEvents.length} {monthEvents.length === 1 ? "compromisso" : "compromissos"} neste mês</p></div>
           <div className="calendar-nav">
+            <button onClick={() => moveVisibleMonth(-1)} aria-label="Mês anterior">‹</button>
+            <strong>{calendarMonthLabel}</strong>
+            <button onClick={() => moveVisibleMonth(1)} aria-label="Próximo mês">›</button>
+          </div>
+        </div>
+        <section className={`month-calendar ${eventsLoading ? "is-loading" : ""}`} aria-label={`Calendário de ${calendarMonthLabel}`}>
+          <div className="calendar-weekdays" aria-hidden="true">
+            {['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map((weekday) => <span key={weekday}>{weekday}</span>)}
+          </div>
+          <div className="calendar-grid">
+            {calendarDays.map((day) => (
+              <button
+                key={day.key}
+                className={`calendar-day${day.currentMonth ? "" : " other-month"}${day.key === selectedDate ? " selected" : ""}${day.key === today ? " today" : ""}${day.events.length ? " has-events" : ""}`}
+                onClick={() => selectCalendarDate(day.key)}
+                aria-label={`${dateFromKey(day.key).toLocaleDateString("pt-BR", { day: "numeric", month: "long" })}, ${day.events.length} compromissos`}
+                aria-pressed={day.key === selectedDate}
+              >
+                <span className="calendar-day-number">{day.day}</span>
+                <span className="calendar-day-events">
+                  {day.events.slice(0, 3).map((event) => (
+                    <span className="calendar-event" key={event.id}><time>{event.startTime}</time>{event.title}</span>
+                  ))}
+                  {day.events.length > 3 && <span className="calendar-more">+{day.events.length - 3} compromisso{day.events.length - 3 === 1 ? "" : "s"}</span>}
+                </span>
+                {day.events.length > 0 && <span className="calendar-event-count" aria-hidden="true">{day.events.length}</span>}
+              </button>
+            ))}
+          </div>
+        </section>
+        <div className="selected-day-heading">
+          <div><h3>{weekdayLabel}</h3><p>{events.length} {events.length === 1 ? "compromisso" : "compromissos"} nesta data</p></div>
+          <div className="day-nav">
             <button onClick={() => moveSelectedDate(-1)} aria-label="Dia anterior">‹</button>
-            <input type="date" aria-label="Data da agenda" value={selectedDate} onChange={(event) => { setEventsLoading(true); setSelectedDate(event.target.value); }} />
             <button onClick={() => moveSelectedDate(1)} aria-label="Próximo dia">›</button>
           </div>
         </div>
