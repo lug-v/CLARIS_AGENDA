@@ -6,6 +6,7 @@ import { attachOwnerCookie, getOwnerId, OWNER_COOKIE } from "@/lib/device";
 export const runtime = "nodejs";
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const MONTH_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
 const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 type EventInput = {
@@ -47,27 +48,47 @@ export async function GET(request: NextRequest) {
   const currentOwner = cookieStore.get(OWNER_COOKIE)?.value;
   const ownerId = getOwnerId(currentOwner);
   const date = request.nextUrl.searchParams.get("date") || "";
+  const month = request.nextUrl.searchParams.get("month") || "";
 
-  if (!isValidDate(date)) {
-    return NextResponse.json({ error: "Informe uma data válida." }, { status: 400 });
+  if (!month && !isValidDate(date)) {
+    return NextResponse.json({ error: "Informe uma data ou mês válido." }, { status: 400 });
+  }
+  if (month && !MONTH_PATTERN.test(month)) {
+    return NextResponse.json({ error: "Informe um mês válido." }, { status: 400 });
   }
 
   try {
     await ensureDatabaseSchema();
     const sql = getDatabase();
-    const rows = await sql`
-      SELECT
-        id::text,
-        title,
-        event_date::text AS date,
-        to_char(start_time, 'HH24:MI') AS "startTime",
-        COALESCE(to_char(end_time, 'HH24:MI'), '') AS "endTime",
-        location,
-        notes
-      FROM agenda_events
-      WHERE owner_id = ${ownerId}::uuid AND event_date = ${date}::date
-      ORDER BY start_time, created_at
-    `;
+    const rows = month
+      ? await sql`
+          SELECT
+            id::text,
+            title,
+            event_date::text AS date,
+            to_char(start_time, 'HH24:MI') AS "startTime",
+            COALESCE(to_char(end_time, 'HH24:MI'), '') AS "endTime",
+            location,
+            notes
+          FROM agenda_events
+          WHERE owner_id = ${ownerId}::uuid
+            AND event_date >= ${`${month}-01`}::date
+            AND event_date < ${`${month}-01`}::date + INTERVAL '1 month'
+          ORDER BY event_date, start_time, created_at
+        `
+      : await sql`
+          SELECT
+            id::text,
+            title,
+            event_date::text AS date,
+            to_char(start_time, 'HH24:MI') AS "startTime",
+            COALESCE(to_char(end_time, 'HH24:MI'), '') AS "endTime",
+            location,
+            notes
+          FROM agenda_events
+          WHERE owner_id = ${ownerId}::uuid AND event_date = ${date}::date
+          ORDER BY start_time, created_at
+        `;
     return attachOwnerCookie(NextResponse.json({ events: rows }), ownerId, Boolean(currentOwner));
   } catch (error) {
     return databaseError(error);
