@@ -13,6 +13,11 @@ type EventDraft = {
   notes: string;
   confidence: number;
   sourceText: string;
+  recurrence: "none" | "daily" | "weekly" | "monthly";
+  recurrenceInterval: number;
+  recurrenceWeekdays: number[];
+  recurrenceUntil: string;
+  recurrenceCount: number;
 };
 type AgendaEvent = {
   id: string;
@@ -56,8 +61,10 @@ export default function Home() {
   const [monthEvents, setMonthEvents] = useState<AgendaEvent[]>([]);
   const [text, setText] = useState("");
   const [draft, setDraft] = useState<EventDraft | null>(null);
+  const [draftQueue, setDraftQueue] = useState<EventDraft[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState("");
   const [conflictPending, setConflictPending] = useState(false);
   const [eventsLoading, setEventsLoading] = useState(true);
   const [listening, setListening] = useState(false);
@@ -186,11 +193,15 @@ export default function Home() {
     setLoading(true);
     setMessage("");
     replaceDraft(null);
+    setDraftQueue([]);
     try {
       const response = await fetch("/api/analyze", { method: "POST", headers, body: payload });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Não foi possível interpretar.");
-      replaceDraft(data.event);
+      const interpreted = Array.isArray(data.events) && data.events.length ? data.events as EventDraft[] : [data.event as EventDraft];
+      replaceDraft(interpreted[0]);
+      setDraftQueue(interpreted.slice(1));
+      if (interpreted.length > 1) setMessage(`${interpreted.length} compromissos encontrados. Confirme um por vez.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Não foi possível interpretar.");
     } finally {
@@ -271,16 +282,48 @@ export default function Home() {
         return;
       }
       if (!response.ok) throw new Error(data.error || "Não foi possível salvar o compromisso.");
-      replaceDraft(null);
-      setText("");
+      const nextDraft = draftQueue[0] || null;
+      replaceDraft(nextDraft);
+      setDraftQueue((current) => current.slice(1));
+      if (!nextDraft) setText("");
       setSelectedDate(data.event.date);
       setVisibleMonth(data.event.date.slice(0, 7));
       await loadEvents(data.event.date.slice(0, 7));
-      setMessage("Compromisso salvo na sua agenda.");
+      const createdCount = Number(data.createdCount || 1);
+      setMessage(nextDraft
+        ? `Compromisso salvo. Restam ${draftQueue.length} para confirmar.`
+        : createdCount > 1
+          ? `${createdCount} ocorrências recorrentes foram salvas.`
+          : "Compromisso salvo na sua agenda.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Não foi possível salvar o compromisso.");
     } finally {
       setSaving(false);
+    }
+  }
+
+  function cancelCurrentDraft() {
+    const nextDraft = draftQueue[0] || null;
+    replaceDraft(nextDraft);
+    setDraftQueue((current) => current.slice(1));
+    if (nextDraft) setMessage(`Item ignorado. Restam ${draftQueue.length} para revisar.`);
+    else setMessage("");
+  }
+
+  async function deleteEvent(event: AgendaEvent) {
+    if (!window.confirm(`Excluir “${event.title}”? Esta ação não poderá ser desfeita.`)) return;
+    setDeletingId(event.id);
+    setMessage("");
+    try {
+      const response = await fetch(`/api/events?id=${encodeURIComponent(event.id)}`, { method: "DELETE" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Não foi possível excluir o compromisso.");
+      setMonthEvents((current) => current.filter((item) => item.id !== event.id));
+      setMessage("Compromisso excluído da agenda.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível excluir o compromisso.");
+    } finally {
+      setDeletingId("");
     }
   }
 
@@ -384,7 +427,7 @@ export default function Home() {
             {!loading && mode === "photo" && <label className="upload"><input type="file" accept="image/*" onChange={analyzePhoto} /><span>▣</span><div><strong>Escolha uma foto da agenda</strong><p>Foto, print ou página escrita à mão · até 10 MB</p></div></label>}
             {!loading && mode === "text" && <><textarea value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) analyzeText(); }} aria-label="Descreva o compromisso" placeholder="Ex: Reunião com a Ana sexta às 10h, por uma hora..." /><button className="send" onClick={analyzeText} aria-label="Interpretar compromisso">➜</button></>}
           </div>
-          {message && <p className={message.startsWith("Compromisso salvo") ? "notice success" : "notice"}>{message}</p>}
+          {message && <p className={message.includes("salv") || message.includes("excluído") ? "notice success" : "notice"}>{message}</p>}
           {draft && <section className="review-card">
             <div className="review-title"><span>✓</span><div><h3>Confira antes de agendar</h3><p>{Math.round((draft.confidence || 0.8) * 100)}% de confiança na interpretação</p></div></div>
             <div className="review-grid">
@@ -394,8 +437,12 @@ export default function Home() {
               <label>Início<input type="time" value={draft.startTime} onChange={(event) => replaceDraft({ ...draft, startTime: event.target.value })} /></label>
               <label>Término<input type="time" value={draft.endTime} onChange={(event) => replaceDraft({ ...draft, endTime: event.target.value })} /></label>
               <label className="location">Local<input value={draft.location} placeholder="Opcional" onChange={(event) => replaceDraft({ ...draft, location: event.target.value })} /></label>
+              <label>Repetição<select value={draft.recurrence || "none"} onChange={(event) => replaceDraft({ ...draft, recurrence: event.target.value as EventDraft["recurrence"], recurrenceCount: event.target.value === "none" ? 1 : Math.max(12, draft.recurrenceCount || 12) })}><option value="none">Não repetir</option><option value="daily">Todos os dias</option><option value="weekly">Toda semana</option><option value="monthly">Todo mês</option></select></label>
+              {draft.recurrence !== "none" && !draft.recurrenceUntil && <label>Quantidade<input type="number" min="1" max="52" value={draft.recurrenceCount || 12} onChange={(event) => replaceDraft({ ...draft, recurrenceCount: Math.min(52, Math.max(1, Number(event.target.value) || 1)) })} /></label>}
+              {draft.recurrence !== "none" && <label>Repetir até<input type="date" min={draft.date} value={draft.recurrenceUntil || ""} onChange={(event) => replaceDraft({ ...draft, recurrenceUntil: event.target.value })} /></label>}
             </div>
-            <div className="review-actions"><button onClick={() => replaceDraft(null)}>Cancelar</button><button className="confirm" disabled={saving} onClick={confirmEvent}>{saving ? "Salvando..." : conflictPending ? "Agendar mesmo assim" : "✓ Confirmar e agendar"}</button></div>
+            {draftQueue.length > 0 && <p className="notice">Mais {draftQueue.length} {draftQueue.length === 1 ? "compromisso aguarda" : "compromissos aguardam"} revisão.</p>}
+            <div className="review-actions"><button onClick={cancelCurrentDraft}>Cancelar</button><button className="confirm" disabled={saving} onClick={confirmEvent}>{saving ? "Salvando..." : conflictPending ? "Agendar mesmo assim" : "✓ Confirmar e agendar"}</button></div>
           </section>}
         </section>
 
@@ -474,7 +521,7 @@ export default function Home() {
                 ? `${dateFromKey(event.date).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })}–${dateFromKey(event.endDate).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })}`
                 : "";
               const detail = [event.location, period, event.endTime ? `${event.startTime}–${event.endTime}` : ""].filter(Boolean).join(" · ");
-              return <article key={event.id}><time>{event.startTime}</time><i className="green" /><div className="event green"><div><strong>{event.title}</strong><p>{detail || event.notes || "Compromisso salvo"}</p></div><button aria-label={`Opções de ${event.title}`}>•••</button></div></article>;
+              return <article key={event.id}><time>{event.startTime}</time><i className="green" /><div className="event green"><div><strong>{event.title}</strong><p>{detail || event.notes || "Compromisso salvo"}</p></div><button disabled={deletingId === event.id} onClick={() => void deleteEvent(event)} aria-label={`Excluir ${event.title}`}>{deletingId === event.id ? "…" : "Excluir"}</button></div></article>;
             })}
           </div>
         </section>

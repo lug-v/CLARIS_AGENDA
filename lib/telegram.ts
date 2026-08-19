@@ -50,7 +50,7 @@ export async function ensureTelegramWebhook(origin: string) {
   });
   await telegramRequest("setMyCommands", {
     commands: [
-      { command: "agenda", description: "Ver os compromissos de hoje" },
+      { command: "agenda", description: "Consultar hoje, amanhã ou a próxima semana" },
       { command: "ajuda", description: "Ver como usar a Clari" },
     ],
   });

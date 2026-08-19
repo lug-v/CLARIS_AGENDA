@@ -33,6 +33,9 @@ export function ensureDatabaseSchema() {
         )
       `;
       await sql`ALTER TABLE agenda_events ADD COLUMN IF NOT EXISTS end_date DATE`;
+      await sql`ALTER TABLE agenda_events ADD COLUMN IF NOT EXISTS series_id UUID`;
+      await sql`ALTER TABLE agenda_events ADD COLUMN IF NOT EXISTS occurrence_index INTEGER NOT NULL DEFAULT 0`;
+      await sql`ALTER TABLE agenda_events ADD COLUMN IF NOT EXISTS recurrence_rule JSONB`;
       await sql`UPDATE agenda_events SET end_date = event_date WHERE end_date IS NULL`;
       await sql`
         CREATE INDEX IF NOT EXISTS agenda_events_owner_date_idx
@@ -75,6 +78,11 @@ export function ensureDatabaseSchema() {
         )
       `;
       await sql`ALTER TABLE telegram_pending_events ADD COLUMN IF NOT EXISTS end_date DATE`;
+      await sql`ALTER TABLE telegram_pending_events ADD COLUMN IF NOT EXISTS recurrence VARCHAR(16) NOT NULL DEFAULT 'none'`;
+      await sql`ALTER TABLE telegram_pending_events ADD COLUMN IF NOT EXISTS recurrence_interval INTEGER NOT NULL DEFAULT 1`;
+      await sql`ALTER TABLE telegram_pending_events ADD COLUMN IF NOT EXISTS recurrence_weekdays INTEGER[] NOT NULL DEFAULT ARRAY[]::INTEGER[]`;
+      await sql`ALTER TABLE telegram_pending_events ADD COLUMN IF NOT EXISTS recurrence_until DATE`;
+      await sql`ALTER TABLE telegram_pending_events ADD COLUMN IF NOT EXISTS recurrence_count INTEGER NOT NULL DEFAULT 1`;
       await sql`UPDATE telegram_pending_events SET end_date = event_date WHERE end_date IS NULL`;
       await sql`
         CREATE TABLE IF NOT EXISTS telegram_updates (

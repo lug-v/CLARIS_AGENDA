@@ -4,6 +4,7 @@ import { ensureDatabaseSchema, getDatabase } from "@/lib/db";
 import { attachOwnerCookie, getOwnerId, OWNER_COOKIE } from "@/lib/device";
 import { findCalendarConflicts } from "@/lib/calendar";
 import { scheduleDefaultReminders } from "@/lib/automations";
+import { expandRecurrence, normalizeRecurrence } from "@/lib/recurrence";
 
 export const runtime = "nodejs";
 
@@ -21,6 +22,11 @@ type EventInput = {
   notes?: unknown;
   sourceText?: unknown;
   allowConflict?: unknown;
+  recurrence?: unknown;
+  recurrenceInterval?: unknown;
+  recurrenceWeekdays?: unknown;
+  recurrenceUntil?: unknown;
+  recurrenceCount?: unknown;
 };
 
 function text(value: unknown, maxLength: number) {
@@ -119,6 +125,13 @@ export async function POST(request: NextRequest) {
       location: text(body.location, 240),
       notes: text(body.notes, 4000),
       sourceText: text(body.sourceText, 4000),
+      ...normalizeRecurrence({
+        recurrence: text(body.recurrence, 16) as "none" | "daily" | "weekly" | "monthly",
+        recurrenceInterval: Number(body.recurrenceInterval),
+        recurrenceWeekdays: Array.isArray(body.recurrenceWeekdays) ? body.recurrenceWeekdays.map(Number) : [],
+        recurrenceUntil: text(body.recurrenceUntil, 10),
+        recurrenceCount: Number(body.recurrenceCount),
+      }, text(body.date, 10)),
     };
 
     if (!event.title || !isValidDate(event.date) || !TIME_PATTERN.test(event.startTime)) {
@@ -133,7 +146,11 @@ export async function POST(request: NextRequest) {
 
     await ensureDatabaseSchema();
     const sql = getDatabase();
-    const conflicts = await findCalendarConflicts(ownerId, event);
+    const occurrences = expandRecurrence(event);
+    const conflicts = (await Promise.all(occurrences.map(async (occurrence) => {
+      const matches = await findCalendarConflicts(ownerId, { ...event, ...occurrence });
+      return matches.map((match) => ({ ...match, occurrenceDate: occurrence.date }));
+    }))).flat().slice(0, 10);
     if (conflicts.length && body.allowConflict !== true) {
       return attachOwnerCookie(
         NextResponse.json(
@@ -148,38 +165,74 @@ export async function POST(request: NextRequest) {
         Boolean(currentOwner),
       );
     }
-    const id = crypto.randomUUID();
+    const seriesId = event.recurrence === "none" ? null : crypto.randomUUID();
+    const recurrenceRule = event.recurrence === "none" ? null : JSON.stringify({
+      recurrence: event.recurrence,
+      recurrenceInterval: event.recurrenceInterval,
+      recurrenceWeekdays: event.recurrenceWeekdays,
+      recurrenceUntil: event.recurrenceUntil,
+      recurrenceCount: event.recurrenceCount,
+    });
+    const preparedOccurrences = occurrences.map((occurrence) => ({ id: crypto.randomUUID(), ...occurrence }));
     const rows = await sql`
       INSERT INTO agenda_events (
-        id, owner_id, title, event_date, end_date, start_time, end_time, location, notes, source_text
-      ) VALUES (
-        ${id}::uuid,
-        ${ownerId}::uuid,
-        ${event.title},
-        ${event.date}::date,
-        ${event.endDate}::date,
-        ${event.startTime}::time,
-        ${event.endTime || null}::time,
-        ${event.location},
-        ${event.notes},
-        ${event.sourceText}
+        id, owner_id, title, event_date, end_date, start_time, end_time, location, notes,
+        source_text, series_id, occurrence_index, recurrence_rule
       )
-      RETURNING
-        id::text,
-        title,
-        event_date::text AS date,
+      SELECT
+        item.id::uuid, ${ownerId}::uuid, ${event.title}, item.date::date, item."endDate"::date,
+        ${event.startTime}::time, ${event.endTime || null}::time, ${event.location}, ${event.notes},
+        ${event.sourceText}, ${seriesId}::uuid, item."occurrenceIndex", ${recurrenceRule}::jsonb
+      FROM jsonb_to_recordset(${JSON.stringify(preparedOccurrences)}::jsonb)
+        AS item(id text, date text, "endDate" text, "occurrenceIndex" integer)
+      RETURNING id::text, title, event_date::text AS date,
         COALESCE(end_date, event_date)::text AS "endDate",
         to_char(start_time, 'HH24:MI') AS "startTime",
-        COALESCE(to_char(end_time, 'HH24:MI'), '') AS "endTime",
-        location,
-        notes
+        COALESCE(to_char(end_time, 'HH24:MI'), '') AS "endTime", location, notes, occurrence_index AS "occurrenceIndex"
     `;
-    try {
-      await scheduleDefaultReminders(ownerId, id, event);
-    } catch (reminderError) {
-      console.error("Compromisso salvo, mas não foi possível preparar os lembretes:", reminderError);
+    rows.sort((a, b) => Number(a.occurrenceIndex) - Number(b.occurrenceIndex));
+    for (const occurrence of preparedOccurrences) {
+      try {
+        await scheduleDefaultReminders(ownerId, occurrence.id, { ...event, ...occurrence });
+      } catch (reminderError) {
+        console.error("Compromisso salvo, mas não foi possível preparar os lembretes:", reminderError);
+      }
     }
-    return attachOwnerCookie(NextResponse.json({ event: rows[0] }, { status: 201 }), ownerId, Boolean(currentOwner));
+    return attachOwnerCookie(
+      NextResponse.json({ event: rows[0], events: rows, createdCount: preparedOccurrences.length }, { status: 201 }),
+      ownerId,
+      Boolean(currentOwner),
+    );
+  } catch (error) {
+    return databaseError(error);
+  }
+}
+
+export async function DELETE(request: NextRequest) {
+  const cookieStore = await cookies();
+  const currentOwner = cookieStore.get(OWNER_COOKIE)?.value;
+  const ownerId = getOwnerId(currentOwner);
+  const id = request.nextUrl.searchParams.get("id") || "";
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) {
+    return NextResponse.json({ error: "Compromisso inválido." }, { status: 400 });
+  }
+  try {
+    await ensureDatabaseSchema();
+    const sql = getDatabase();
+    const deleted = await sql`
+      DELETE FROM agenda_events
+      WHERE id = ${id}::uuid AND owner_id = ${ownerId}::uuid
+      RETURNING id::text
+    `;
+    if (!deleted[0]) {
+      return attachOwnerCookie(
+        NextResponse.json({ error: "Compromisso não encontrado." }, { status: 404 }),
+        ownerId,
+        Boolean(currentOwner),
+      );
+    }
+    await sql`DELETE FROM event_reminders WHERE event_id = ${id}::uuid AND owner_id = ${ownerId}::uuid`;
+    return attachOwnerCookie(NextResponse.json({ deleted: true }), ownerId, Boolean(currentOwner));
   } catch (error) {
     return databaseError(error);
   }

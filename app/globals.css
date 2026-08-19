@@ -21,6 +21,7 @@
 .other-month .calendar-event{opacity:.55}
 .calendar-more{padding-left:4px;color:#7e899b;font-size:9px;font-weight:600}
 .calendar-event-count{display:none}
+.review-grid select{height:39px;border:1px solid #dce3ed;border-radius:8px;background:#fff;padding:0 10px;color:#283750;font:500 12px 'DM Sans'}.event button{padding:7px 9px;border-radius:7px;color:#257957;font-size:11px;font-weight:700}.event button:hover{background:rgba(35,135,91,.1)}.event button:disabled{cursor:wait;opacity:.6}
 .selected-day-heading{display:flex;align-items:center;justify-content:space-between;margin:27px 0 17px}
 .selected-day-heading h3{font:700 14px Manrope;margin:0}
 .selected-day-heading p{font-size:11px;color:#98a2b3;margin:4px 0 0}
