@@ -2,6 +2,8 @@ import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 import { ensureDatabaseSchema, getDatabase } from "@/lib/db";
 import { attachOwnerCookie, getOwnerId, OWNER_COOKIE } from "@/lib/device";
+import { findCalendarConflicts } from "@/lib/calendar";
+import { scheduleDefaultReminders } from "@/lib/automations";
 
 export const runtime = "nodejs";
 
@@ -18,6 +20,7 @@ type EventInput = {
   location?: unknown;
   notes?: unknown;
   sourceText?: unknown;
+  allowConflict?: unknown;
 };
 
 function text(value: unknown, maxLength: number) {
@@ -130,6 +133,21 @@ export async function POST(request: NextRequest) {
 
     await ensureDatabaseSchema();
     const sql = getDatabase();
+    const conflicts = await findCalendarConflicts(ownerId, event);
+    if (conflicts.length && body.allowConflict !== true) {
+      return attachOwnerCookie(
+        NextResponse.json(
+          {
+            code: "EVENT_CONFLICT",
+            error: `Já existe ${conflicts.length === 1 ? "um compromisso" : "mais de um compromisso"} nesse período.`,
+            conflicts,
+          },
+          { status: 409 },
+        ),
+        ownerId,
+        Boolean(currentOwner),
+      );
+    }
     const id = crypto.randomUUID();
     const rows = await sql`
       INSERT INTO agenda_events (
@@ -156,6 +174,11 @@ export async function POST(request: NextRequest) {
         location,
         notes
     `;
+    try {
+      await scheduleDefaultReminders(ownerId, id, event);
+    } catch (reminderError) {
+      console.error("Compromisso salvo, mas não foi possível preparar os lembretes:", reminderError);
+    }
     return attachOwnerCookie(NextResponse.json({ event: rows[0] }, { status: 201 }), ownerId, Boolean(currentOwner));
   } catch (error) {
     return databaseError(error);

@@ -1,6 +1,8 @@
 import { timingSafeEqual } from "node:crypto";
 import { ensureDatabaseSchema, getDatabase } from "@/lib/db";
 import { CalendarEventDraft, interpretImage, interpretText, transcribeAudio } from "@/lib/groq";
+import { findCalendarConflicts } from "@/lib/calendar";
+import { scheduleDefaultReminders } from "@/lib/automations";
 import {
   answerTelegramCallback,
   downloadTelegramFile,
@@ -58,7 +60,7 @@ function formatDate(value: string) {
   return `${day}/${month}/${year}`;
 }
 
-function draftMessage(event: CalendarEventDraft) {
+function draftMessage(event: CalendarEventDraft, conflictTitles: string[] = []) {
   const dateLabel = event.endDate && event.endDate !== event.date
     ? `${formatDate(event.date)} até ${formatDate(event.endDate)}`
     : formatDate(event.date);
@@ -70,6 +72,7 @@ function draftMessage(event: CalendarEventDraft) {
     `Horário: ${event.startTime}${event.endTime ? `–${event.endTime}` : ""}`,
     event.location ? `Local: ${event.location}` : "",
     event.notes ? `Observações: ${event.notes}` : "",
+    conflictTitles.length ? `⚠️ Conflito com: ${conflictTitles.join(", ")}` : "",
     "",
     `Confiança: ${Math.round(event.confidence * 100)}%`,
   ].filter(Boolean).join("\n");
@@ -77,6 +80,7 @@ function draftMessage(event: CalendarEventDraft) {
 
 async function sendDraft(chatId: number, ownerId: string, event: CalendarEventDraft) {
   const sql = getDatabase();
+  const conflicts = await findCalendarConflicts(ownerId, event);
   const id = crypto.randomUUID();
   await sql`DELETE FROM telegram_pending_events WHERE chat_id = ${chatId} AND expires_at < NOW()`;
   await sql`
@@ -89,7 +93,7 @@ async function sendDraft(chatId: number, ownerId: string, event: CalendarEventDr
       ${event.notes}, ${event.sourceText}, ${event.confidence}, NOW() + INTERVAL '30 minutes'
     )
   `;
-  await sendTelegramMessage(chatId, draftMessage(event), {
+  await sendTelegramMessage(chatId, draftMessage(event, conflicts.map((conflict) => conflict.title)), {
     inline_keyboard: [[
       { text: "✅ Confirmar", callback_data: `confirm:${id}` },
       { text: "❌ Cancelar", callback_data: `cancel:${id}` },
@@ -117,6 +121,11 @@ async function connectChat(message: TelegramMessage, code: string) {
       ${message.chat.id}, ${ownerId}::uuid, ${message.from?.id || message.chat.id},
       ${message.from?.username || ""}
     )
+  `;
+  await sql`
+    INSERT INTO automation_preferences (owner_id)
+    VALUES (${ownerId}::uuid)
+    ON CONFLICT (owner_id) DO NOTHING
   `;
   await sendTelegramMessage(
     message.chat.id,
@@ -234,15 +243,24 @@ async function processCallback(callback: TelegramCallback) {
   }
 
   const event = pending[0];
+  const eventId = crypto.randomUUID();
   await sql`
     INSERT INTO agenda_events (
       id, owner_id, title, event_date, end_date, start_time, end_time, location, notes, source_text
     ) VALUES (
-      ${crypto.randomUUID()}::uuid, ${event.ownerId}::uuid, ${event.title}, ${event.date}::date, ${event.endDate}::date,
+      ${eventId}::uuid, ${event.ownerId}::uuid, ${event.title}, ${event.date}::date, ${event.endDate}::date,
       ${event.startTime}::time, ${event.endTime || null}::time, ${event.location},
       ${event.notes}, ${event.sourceText}
     )
   `;
+  try {
+    await scheduleDefaultReminders(String(event.ownerId), eventId, {
+      date: String(event.date),
+      startTime: String(event.startTime),
+    });
+  } catch (reminderError) {
+    console.error("Compromisso salvo pelo Telegram, mas os lembretes não foram preparados:", reminderError);
+  }
   await editTelegramMessage(
     message.chat.id,
     message.message_id,
