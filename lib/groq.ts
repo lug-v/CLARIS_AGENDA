@@ -1,6 +1,8 @@
+import { normalizeRecurrence, RecurrenceRule } from "@/lib/recurrence";
+
 const GROQ_URL = "https://api.groq.com/openai/v1";
 
-export type CalendarEventDraft = {
+export type CalendarEventDraft = RecurrenceRule & {
   title: string;
   date: string;
   endDate: string;
@@ -12,9 +14,7 @@ export type CalendarEventDraft = {
   sourceText: string;
 };
 
-const systemPrompt = `Você transforma pedidos em compromissos de calendário em português do Brasil. Responda APENAS um objeto JSON válido com exatamente: title, date, endDate, startTime, endTime, location, notes, confidence e sourceText.
-
-Regras:
+const eventFieldRules = `Cada compromisso usa exatamente: title, date, endDate, startTime, endTime, location, notes, confidence, sourceText, recurrence, recurrenceInterval, recurrenceWeekdays, recurrenceUntil e recurrenceCount.
 - date é a primeira data do compromisso em YYYY-MM-DD.
 - endDate é a última data, inclusive, em YYYY-MM-DD. Em compromisso de um dia, endDate deve ser igual a date.
 - Resolva expressões relativas usando a data atual informada e o fuso America/Sao_Paulo.
@@ -26,6 +26,16 @@ Regras:
 - notes pode explicar o período ou informações adicionais sem repetir título, data e local.
 - confidence deve ser um número de 0 a 1. Reduza apenas quando houver ambiguidade real.
 - sourceText deve repetir o pedido recebido.`;
+
+const systemPrompt = `Você transforma pedidos em compromissos de calendário em português do Brasil. Responda APENAS um objeto JSON válido. ${eventFieldRules}`;
+
+const recurrenceRules = `
+- recurrence deve ser none, daily, weekly ou monthly.
+- Para "todo dia", "toda semana", "toda segunda" ou "todo mês", preencha a recorrência correspondente.
+- recurrenceInterval é o intervalo entre repetições e normalmente vale 1.
+- recurrenceWeekdays usa 0 para domingo até 6 para sábado. Use na recorrência semanal.
+- recurrenceUntil é YYYY-MM-DD quando houver uma data final explícita; caso contrário use string vazia.
+- recurrenceCount é o número total de ocorrências. Quando não for informado, use 12. Nunca ultrapasse 52.`;
 
 function todayInSaoPaulo() {
   return new Intl.DateTimeFormat("en-CA", {
@@ -106,6 +116,13 @@ function normalizeEvent(value: Record<string, unknown>, sourceText: string): Cal
     notes: String(value.notes || ""),
     confidence: Number(value.confidence ?? 0.5),
     sourceText,
+    ...normalizeRecurrence({
+      recurrence: String(value.recurrence || "none") as RecurrenceRule["recurrence"],
+      recurrenceInterval: Number(value.recurrenceInterval),
+      recurrenceWeekdays: Array.isArray(value.recurrenceWeekdays) ? value.recurrenceWeekdays.map(Number) : [],
+      recurrenceUntil: String(value.recurrenceUntil || ""),
+      recurrenceCount: Number(value.recurrenceCount),
+    }, date),
   };
 }
 
@@ -121,7 +138,7 @@ export async function interpretText(text: string): Promise<CalendarEventDraft> {
       max_completion_tokens: 1024,
       temperature: 0.2,
       messages: [
-        { role: "system", content: systemPrompt },
+        { role: "system", content: `${systemPrompt}${recurrenceRules}` },
         { role: "user", content: `Hoje é ${today} (${weekdayInSaoPaulo()}). Verifique se cada data corresponde ao dia da semana mencionado. Pedido: ${text}` },
       ],
     }),
@@ -140,7 +157,7 @@ export async function transcribeAudio(file: File) {
   return String(transcription.text || "").trim();
 }
 
-export async function interpretImage(image: string, sourceText = "Compromisso extraído de uma imagem") {
+export async function interpretImageEvents(image: string, sourceText = "Compromissos extraídos de uma imagem") {
   const today = todayInSaoPaulo();
   const result = await groq("/chat/completions", {
     method: "POST",
@@ -152,17 +169,23 @@ export async function interpretImage(image: string, sourceText = "Compromisso ex
       max_completion_tokens: 1024,
       temperature: 0.2,
       messages: [
-        { role: "system", content: systemPrompt },
+        { role: "system", content: `Você lê agendas, convites, prints e anotações em português do Brasil. Responda APENAS JSON no formato {"events": [...]}. Extraia todos os compromissos legíveis, no máximo 10. Não invente informações. ${eventFieldRules}${recurrenceRules}` },
         {
           role: "user",
           content: [
-            { type: "text", text: `Hoje é ${today} (${weekdayInSaoPaulo()}). Leia esta agenda e extraia o compromisso mais claro.` },
+            { type: "text", text: `Hoje é ${today} (${weekdayInSaoPaulo()}). Leia a imagem e extraia todos os compromissos legíveis, no máximo 10.` },
             { type: "image_url", image_url: { url: image } },
           ],
         },
       ],
     }),
   });
-  const parsed = JSON.parse(result.choices?.[0]?.message?.content || "{}") as Record<string, unknown>;
-  return normalizeEvent(parsed, sourceText);
+  const parsed = JSON.parse(result.choices?.[0]?.message?.content || "{}") as { events?: Record<string, unknown>[] };
+  const events = Array.isArray(parsed.events) ? parsed.events.slice(0, 10) : [];
+  if (!events.length) throw new Error("IMAGE_WITHOUT_EVENTS");
+  return events.map((event) => normalizeEvent(event, sourceText));
+}
+
+export async function interpretImage(image: string, sourceText?: string) {
+  return (await interpretImageEvents(image, sourceText))[0];
 }

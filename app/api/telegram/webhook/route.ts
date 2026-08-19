@@ -1,8 +1,10 @@
 import { timingSafeEqual } from "node:crypto";
 import { ensureDatabaseSchema, getDatabase } from "@/lib/db";
-import { CalendarEventDraft, interpretImage, interpretText, transcribeAudio } from "@/lib/groq";
+import { CalendarEventDraft, interpretImageEvents, interpretText, transcribeAudio } from "@/lib/groq";
 import { findCalendarConflicts } from "@/lib/calendar";
 import { scheduleDefaultReminders } from "@/lib/automations";
+import { AgendaRange, detectAgendaQuery } from "@/lib/agenda-query";
+import { expandRecurrence, normalizeRecurrence, recurrenceLabel } from "@/lib/recurrence";
 import {
   answerTelegramCallback,
   downloadTelegramFile,
@@ -46,15 +48,6 @@ function validWebhookSecret(received: string | null) {
   return expectedBuffer.length === receivedBuffer.length && timingSafeEqual(expectedBuffer, receivedBuffer);
 }
 
-function todayInSaoPaulo() {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/Sao_Paulo",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date());
-}
-
 function formatDate(value: string) {
   const [year, month, day] = value.split("-");
   return `${day}/${month}/${year}`;
@@ -72,6 +65,7 @@ function draftMessage(event: CalendarEventDraft, conflictTitles: string[] = []) 
     `Horário: ${event.startTime}${event.endTime ? `–${event.endTime}` : ""}`,
     event.location ? `Local: ${event.location}` : "",
     event.notes ? `Observações: ${event.notes}` : "",
+    recurrenceLabel(event) ? `Repetição: ${recurrenceLabel(event)}` : "",
     conflictTitles.length ? `⚠️ Conflito com: ${conflictTitles.join(", ")}` : "",
     "",
     `Confiança: ${Math.round(event.confidence * 100)}%`,
@@ -86,11 +80,14 @@ async function sendDraft(chatId: number, ownerId: string, event: CalendarEventDr
   await sql`
     INSERT INTO telegram_pending_events (
       id, chat_id, owner_id, title, event_date, end_date, start_time, end_time,
-      location, notes, source_text, confidence, expires_at
+      location, notes, source_text, confidence, recurrence, recurrence_interval,
+      recurrence_weekdays, recurrence_until, recurrence_count, expires_at
     ) VALUES (
       ${id}::uuid, ${chatId}, ${ownerId}::uuid, ${event.title}, ${event.date}::date, ${event.endDate}::date,
       ${event.startTime}::time, ${event.endTime || null}::time, ${event.location},
-      ${event.notes}, ${event.sourceText}, ${event.confidence}, NOW() + INTERVAL '30 minutes'
+      ${event.notes}, ${event.sourceText}, ${event.confidence}, ${event.recurrence},
+      ${event.recurrenceInterval}, ${event.recurrenceWeekdays}, ${event.recurrenceUntil || null}::date,
+      ${event.recurrenceCount}, NOW() + INTERVAL '30 minutes'
     )
   `;
   await sendTelegramMessage(chatId, draftMessage(event, conflicts.map((conflict) => conflict.title)), {
@@ -133,23 +130,28 @@ async function connectChat(message: TelegramMessage, code: string) {
   );
 }
 
-async function showAgenda(chatId: number, ownerId: string) {
+async function showAgenda(chatId: number, ownerId: string, range: AgendaRange) {
   const sql = getDatabase();
-  const today = todayInSaoPaulo();
   const events = await sql`
-    SELECT title, to_char(start_time, 'HH24:MI') AS time, location
+    SELECT title, event_date::text AS date, COALESCE(end_date, event_date)::text AS "endDate",
+      to_char(start_time, 'HH24:MI') AS time, location
     FROM agenda_events
     WHERE owner_id = ${ownerId}::uuid
-      AND event_date <= ${today}::date
-      AND COALESCE(end_date, event_date) >= ${today}::date
-    ORDER BY start_time
+      AND event_date <= ${range.end}::date
+      AND COALESCE(end_date, event_date) >= ${range.start}::date
+    ORDER BY event_date, start_time
   `;
   if (!events.length) {
-    await sendTelegramMessage(chatId, "Você não tem compromissos para hoje.");
+    await sendTelegramMessage(chatId, `Você não tem compromissos ${range.label}.`);
     return;
   }
-  const lines = events.map((event) => `${event.time} — ${event.title}${event.location ? ` · ${event.location}` : ""}`);
-  await sendTelegramMessage(chatId, ["📆 Sua agenda de hoje", "", ...lines].join("\n"));
+  const lines = events.map((event) => {
+    const period = event.endDate !== event.date
+      ? `${formatDate(String(event.date))}–${formatDate(String(event.endDate))}`
+      : formatDate(String(event.date));
+    return `${period} · ${event.time} — ${event.title}${event.location ? ` · ${event.location}` : ""}`;
+  });
+  await sendTelegramMessage(chatId, [`📆 Sua agenda ${range.label}`, "", ...lines].join("\n"));
 }
 
 async function processMessage(message: TelegramMessage) {
@@ -177,32 +179,38 @@ async function processMessage(message: TelegramMessage) {
   }
   const ownerId = String(connections[0].ownerId);
 
-  if (text === "/agenda") {
-    await showAgenda(message.chat.id, ownerId);
+  const textQuery = detectAgendaQuery(text);
+  if (textQuery) {
+    await showAgenda(message.chat.id, ownerId, textQuery);
     return;
   }
   if (text === "/ajuda") {
-    await sendTelegramMessage(message.chat.id, "Envie texto, áudio ou foto de uma agenda. Use /agenda para ver os compromissos de hoje.");
+    await sendTelegramMessage(message.chat.id, "Envie texto, áudio ou foto de uma agenda. Pergunte “o que tenho amanhã?” ou use /agenda, /agenda amanhã e /agenda semana que vem.");
     return;
   }
 
   await sendTelegramChatAction(message.chat.id, "typing");
-  let event: CalendarEventDraft;
+  let events: CalendarEventDraft[];
   if (message.voice) {
     const audio = await downloadTelegramFile(message.voice.file_id, "compromisso.ogg");
     const transcript = await transcribeAudio(audio);
-    event = await interpretText(transcript);
+    const voiceQuery = detectAgendaQuery(transcript);
+    if (voiceQuery) {
+      await showAgenda(message.chat.id, ownerId, voiceQuery);
+      return;
+    }
+    events = [await interpretText(transcript)];
   } else if (message.photo?.length) {
     const photo = message.photo[message.photo.length - 1];
     const image = await telegramFileAsDataUrl(photo.file_id);
-    event = await interpretImage(image, message.caption || "Compromisso extraído de uma foto enviada pelo Telegram");
+    events = await interpretImageEvents(image, message.caption || "Compromissos extraídos de uma foto enviada pelo Telegram");
   } else if (text && !text.startsWith("/")) {
-    event = await interpretText(text);
+    events = [await interpretText(text)];
   } else {
     await sendTelegramMessage(message.chat.id, "Envie um compromisso por texto, áudio ou foto. Use /ajuda para ver as opções.");
     return;
   }
-  await sendDraft(message.chat.id, ownerId, event);
+  for (const event of events) await sendDraft(message.chat.id, ownerId, event);
 }
 
 async function processCallback(callback: TelegramCallback) {
@@ -235,7 +243,11 @@ async function processCallback(callback: TelegramCallback) {
       COALESCE(end_date, event_date)::text AS "endDate",
       to_char(start_time, 'HH24:MI') AS "startTime",
       COALESCE(to_char(end_time, 'HH24:MI'), '') AS "endTime",
-      location, notes, source_text AS "sourceText"
+      location, notes, source_text AS "sourceText",
+      recurrence, recurrence_interval AS "recurrenceInterval",
+      recurrence_weekdays AS "recurrenceWeekdays",
+      COALESCE(recurrence_until::text, '') AS "recurrenceUntil",
+      recurrence_count AS "recurrenceCount"
   `;
   if (!pending[0]) {
     await editTelegramMessage(message.chat.id, message.message_id, "Este pedido expirou ou já foi processado.");
@@ -243,28 +255,43 @@ async function processCallback(callback: TelegramCallback) {
   }
 
   const event = pending[0];
-  const eventId = crypto.randomUUID();
+  const recurrence = normalizeRecurrence({
+    recurrence: String(event.recurrence) as CalendarEventDraft["recurrence"],
+    recurrenceInterval: Number(event.recurrenceInterval),
+    recurrenceWeekdays: event.recurrenceWeekdays as number[],
+    recurrenceUntil: String(event.recurrenceUntil),
+    recurrenceCount: Number(event.recurrenceCount),
+  }, String(event.date));
+  const occurrences = expandRecurrence({ date: String(event.date), endDate: String(event.endDate), ...recurrence });
+  const seriesId = recurrence.recurrence === "none" ? null : crypto.randomUUID();
+  const recurrenceRule = recurrence.recurrence === "none" ? null : JSON.stringify(recurrence);
+  const preparedOccurrences = occurrences.map((occurrence) => ({ id: crypto.randomUUID(), ...occurrence }));
   await sql`
     INSERT INTO agenda_events (
-      id, owner_id, title, event_date, end_date, start_time, end_time, location, notes, source_text
-    ) VALUES (
-      ${eventId}::uuid, ${event.ownerId}::uuid, ${event.title}, ${event.date}::date, ${event.endDate}::date,
-      ${event.startTime}::time, ${event.endTime || null}::time, ${event.location},
-      ${event.notes}, ${event.sourceText}
+      id, owner_id, title, event_date, end_date, start_time, end_time, location, notes,
+      source_text, series_id, occurrence_index, recurrence_rule
     )
+    SELECT
+      item.id::uuid, ${event.ownerId}::uuid, ${event.title}, item.date::date, item."endDate"::date,
+      ${event.startTime}::time, ${event.endTime || null}::time, ${event.location}, ${event.notes},
+      ${event.sourceText}, ${seriesId}::uuid, item."occurrenceIndex", ${recurrenceRule}::jsonb
+    FROM jsonb_to_recordset(${JSON.stringify(preparedOccurrences)}::jsonb)
+      AS item(id text, date text, "endDate" text, "occurrenceIndex" integer)
   `;
-  try {
-    await scheduleDefaultReminders(String(event.ownerId), eventId, {
-      date: String(event.date),
-      startTime: String(event.startTime),
-    });
-  } catch (reminderError) {
-    console.error("Compromisso salvo pelo Telegram, mas os lembretes não foram preparados:", reminderError);
+  for (const occurrence of preparedOccurrences) {
+    try {
+      await scheduleDefaultReminders(String(event.ownerId), occurrence.id, {
+        date: occurrence.date,
+        startTime: String(event.startTime),
+      });
+    } catch (reminderError) {
+      console.error("Compromisso salvo pelo Telegram, mas os lembretes não foram preparados:", reminderError);
+    }
   }
   await editTelegramMessage(
     message.chat.id,
     message.message_id,
-    `✅ Compromisso salvo!\n\n${event.title}\n${formatDate(String(event.date))}${event.endDate !== event.date ? ` até ${formatDate(String(event.endDate))}` : ""} · ${event.startTime}${event.endTime ? `–${event.endTime}` : ""}`,
+    `✅ ${preparedOccurrences.length > 1 ? `${preparedOccurrences.length} compromissos salvos` : "Compromisso salvo"}!\n\n${event.title}\n${formatDate(String(event.date))}${event.endDate !== event.date ? ` até ${formatDate(String(event.endDate))}` : ""} · ${event.startTime}${event.endTime ? `–${event.endTime}` : ""}`,
   );
 }
 

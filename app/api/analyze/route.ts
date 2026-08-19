@@ -1,4 +1,4 @@
-import { interpretImage, interpretText, transcribeAudio } from "@/lib/groq";
+import { interpretImageEvents, interpretText, transcribeAudio } from "@/lib/groq";
 
 export async function POST(request: Request) {
   try {
@@ -8,15 +8,18 @@ export async function POST(request: Request) {
       const file = input.get("file");
       if (!(file instanceof File)) return Response.json({ error: "Arquivo de áudio ausente." }, { status: 400 });
       const transcript = await transcribeAudio(file);
-      return Response.json({ event: await interpretText(transcript), transcript });
+      const event = await interpretText(transcript);
+      return Response.json({ event, events: [event], transcript });
     }
 
     const body = await request.json() as { type?: string; text?: string; image?: string };
     if (body.type === "image" && body.image) {
-      return Response.json({ event: await interpretImage(body.image) });
+      const events = await interpretImageEvents(body.image);
+      return Response.json({ event: events[0], events });
     }
     if (!body.text?.trim()) return Response.json({ error: "Descreva um compromisso." }, { status: 400 });
-    return Response.json({ event: await interpretText(body.text.trim()) });
+    const event = await interpretText(body.text.trim());
+    return Response.json({ event, events: [event] });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Falha inesperada";
     if (message === "GROQ_API_KEY_NOT_CONFIGURED") {

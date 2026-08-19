@@ -7,11 +7,14 @@ Evoluir a Clari de uma agenda que registra compromissos para uma assistente que 
 ## Fluxo
 
 1. Página ou Telegram recebe texto, áudio ou imagem.
-2. A camada de interpretação transforma a entrada em uma intenção e dados estruturados.
-3. O serviço de agenda valida datas, horários e conflitos.
-4. O Neon persiste eventos, preferências e entregas pendentes.
-5. Um worker protegido processa automações vencidas.
-6. O Telegram entrega resumos e lembretes.
+2. A camada de intenção separa consultas de criação de compromissos.
+3. Groq transforma a entrada em um ou até dez rascunhos estruturados.
+4. O serviço de agenda valida datas, recorrência, horários e conflitos.
+5. O Neon persiste eventos, séries, preferências e entregas pendentes.
+6. Consultas do Telegram leem intervalos como hoje, amanhã e próxima semana.
+7. A exclusão remove somente o evento selecionado e seus lembretes.
+8. Um worker protegido processa automações vencidas.
+9. O Telegram entrega resumos e lembretes.
 
 ## Componentes
 
@@ -21,14 +24,17 @@ Evoluir a Clari de uma agenda que registra compromissos para uma assistente que 
 - `automation_deliveries`: controle idempotente de resumos e outras entregas.
 - `/api/cron/daily-summary`: worker protegido por `CRON_SECRET`.
 - `lib/calendar.ts`: regras compartilhadas de conflito.
+- `lib/recurrence.ts`: normalização e expansão atômica de séries recorrentes.
+- `lib/agenda-query.ts`: interpretação determinística de consultas do Telegram.
 - `lib/automations.ts`: processamento de resumos e, futuramente, lembretes.
 
 ## Fases
 
 1. Detecção de conflitos, tabelas-base e resumo diário pelo Telegram.
 2. Disparador frequente para lembretes de 24 horas, 1 hora e horário inicial.
-3. Recorrência, consulta de horários livres, reagendamento e cancelamento.
-4. Tempo de deslocamento, regras de confiança e autenticação entre aparelhos.
+3. Recorrência, consultas por período e exclusão de ocorrências.
+4. Consulta de horários livres, reagendamento e cancelamento de séries inteiras.
+5. Tempo de deslocamento, regras de confiança e autenticação entre aparelhos.
 
 ## Operação
 
