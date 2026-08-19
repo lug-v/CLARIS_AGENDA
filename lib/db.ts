@@ -82,6 +82,50 @@ export function ensureDatabaseSchema() {
           received_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
       `;
+      await sql`
+        CREATE TABLE IF NOT EXISTS automation_preferences (
+          owner_id UUID PRIMARY KEY,
+          timezone VARCHAR(64) NOT NULL DEFAULT 'America/Sao_Paulo',
+          daily_digest_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+          daily_digest_hour SMALLINT NOT NULL DEFAULT 7 CHECK (daily_digest_hour BETWEEN 0 AND 23),
+          reminder_offsets INTEGER[] NOT NULL DEFAULT ARRAY[1440, 60],
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `;
+      await sql`
+        CREATE TABLE IF NOT EXISTS event_reminders (
+          id UUID PRIMARY KEY,
+          event_id UUID NOT NULL,
+          owner_id UUID NOT NULL,
+          kind VARCHAR(32) NOT NULL,
+          remind_at TIMESTAMPTZ NOT NULL,
+          status VARCHAR(16) NOT NULL DEFAULT 'pending',
+          attempts INTEGER NOT NULL DEFAULT 0,
+          sent_at TIMESTAMPTZ,
+          last_error TEXT NOT NULL DEFAULT '',
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          UNIQUE (event_id, kind)
+        )
+      `;
+      await sql`
+        CREATE INDEX IF NOT EXISTS event_reminders_due_idx
+        ON event_reminders (status, remind_at)
+      `;
+      await sql`
+        CREATE TABLE IF NOT EXISTS automation_deliveries (
+          id UUID PRIMARY KEY,
+          owner_id UUID NOT NULL,
+          kind VARCHAR(48) NOT NULL,
+          delivery_date DATE NOT NULL,
+          status VARCHAR(16) NOT NULL DEFAULT 'processing',
+          attempts INTEGER NOT NULL DEFAULT 1,
+          sent_at TIMESTAMPTZ,
+          last_error TEXT NOT NULL DEFAULT '',
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          UNIQUE (owner_id, kind, delivery_date)
+        )
+      `;
     })().catch((error) => {
       schemaReady = null;
       throw error;

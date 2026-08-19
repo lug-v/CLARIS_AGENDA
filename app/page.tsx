@@ -58,6 +58,7 @@ export default function Home() {
   const [draft, setDraft] = useState<EventDraft | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [conflictPending, setConflictPending] = useState(false);
   const [eventsLoading, setEventsLoading] = useState(true);
   const [listening, setListening] = useState(false);
   const [message, setMessage] = useState("");
@@ -176,15 +177,20 @@ export default function Home() {
     };
   }, []);
 
+  function replaceDraft(nextDraft: EventDraft | null) {
+    setConflictPending(false);
+    setDraft(nextDraft);
+  }
+
   async function analyze(payload: BodyInit, headers?: HeadersInit) {
     setLoading(true);
     setMessage("");
-    setDraft(null);
+    replaceDraft(null);
     try {
       const response = await fetch("/api/analyze", { method: "POST", headers, body: payload });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Não foi possível interpretar.");
-      setDraft(data.event);
+      replaceDraft(data.event);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Não foi possível interpretar.");
     } finally {
@@ -253,11 +259,19 @@ export default function Home() {
       const response = await fetch("/api/events", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(draft),
+        body: JSON.stringify({ ...draft, allowConflict: conflictPending }),
       });
       const data = await response.json();
+      if (response.status === 409 && data.code === "EVENT_CONFLICT") {
+        const names = Array.isArray(data.conflicts)
+          ? data.conflicts.map((conflict: { title?: string }) => conflict.title).filter(Boolean).join(", ")
+          : "";
+        setConflictPending(true);
+        setMessage(`${data.error}${names ? ` Conflito com: ${names}.` : ""} Revise ou clique em “Agendar mesmo assim”.`);
+        return;
+      }
       if (!response.ok) throw new Error(data.error || "Não foi possível salvar o compromisso.");
-      setDraft(null);
+      replaceDraft(null);
       setText("");
       setSelectedDate(data.event.date);
       setVisibleMonth(data.event.date.slice(0, 7));
@@ -272,7 +286,7 @@ export default function Home() {
 
   function changeMode(next: Mode) {
     setMode(next);
-    setDraft(null);
+    replaceDraft(null);
     setMessage("");
   }
 
@@ -374,14 +388,14 @@ export default function Home() {
           {draft && <section className="review-card">
             <div className="review-title"><span>✓</span><div><h3>Confira antes de agendar</h3><p>{Math.round((draft.confidence || 0.8) * 100)}% de confiança na interpretação</p></div></div>
             <div className="review-grid">
-              <label>Título<input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label>
-              <label>Data<input type="date" value={draft.date} onChange={(event) => setDraft({ ...draft, date: event.target.value })} /></label>
-              <label>Data final<input type="date" min={draft.date} value={draft.endDate || draft.date} onChange={(event) => setDraft({ ...draft, endDate: event.target.value })} /></label>
-              <label>Início<input type="time" value={draft.startTime} onChange={(event) => setDraft({ ...draft, startTime: event.target.value })} /></label>
-              <label>Término<input type="time" value={draft.endTime} onChange={(event) => setDraft({ ...draft, endTime: event.target.value })} /></label>
-              <label className="location">Local<input value={draft.location} placeholder="Opcional" onChange={(event) => setDraft({ ...draft, location: event.target.value })} /></label>
+              <label>Título<input value={draft.title} onChange={(event) => replaceDraft({ ...draft, title: event.target.value })} /></label>
+              <label>Data<input type="date" value={draft.date} onChange={(event) => replaceDraft({ ...draft, date: event.target.value })} /></label>
+              <label>Data final<input type="date" min={draft.date} value={draft.endDate || draft.date} onChange={(event) => replaceDraft({ ...draft, endDate: event.target.value })} /></label>
+              <label>Início<input type="time" value={draft.startTime} onChange={(event) => replaceDraft({ ...draft, startTime: event.target.value })} /></label>
+              <label>Término<input type="time" value={draft.endTime} onChange={(event) => replaceDraft({ ...draft, endTime: event.target.value })} /></label>
+              <label className="location">Local<input value={draft.location} placeholder="Opcional" onChange={(event) => replaceDraft({ ...draft, location: event.target.value })} /></label>
             </div>
-            <div className="review-actions"><button onClick={() => setDraft(null)}>Cancelar</button><button className="confirm" disabled={saving} onClick={confirmEvent}>{saving ? "Salvando..." : "✓ Confirmar e agendar"}</button></div>
+            <div className="review-actions"><button onClick={() => replaceDraft(null)}>Cancelar</button><button className="confirm" disabled={saving} onClick={confirmEvent}>{saving ? "Salvando..." : conflictPending ? "Agendar mesmo assim" : "✓ Confirmar e agendar"}</button></div>
           </section>}
         </section>
 
