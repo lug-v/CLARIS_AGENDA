@@ -12,6 +12,7 @@ const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
 type EventInput = {
   title?: unknown;
   date?: unknown;
+  endDate?: unknown;
   startTime?: unknown;
   endTime?: unknown;
   location?: unknown;
@@ -66,14 +67,15 @@ export async function GET(request: NextRequest) {
             id::text,
             title,
             event_date::text AS date,
+            COALESCE(end_date, event_date)::text AS "endDate",
             to_char(start_time, 'HH24:MI') AS "startTime",
             COALESCE(to_char(end_time, 'HH24:MI'), '') AS "endTime",
             location,
             notes
           FROM agenda_events
           WHERE owner_id = ${ownerId}::uuid
-            AND event_date >= ${`${month}-01`}::date
             AND event_date < ${`${month}-01`}::date + INTERVAL '1 month'
+            AND COALESCE(end_date, event_date) >= ${`${month}-01`}::date
           ORDER BY event_date, start_time, created_at
         `
       : await sql`
@@ -81,12 +83,15 @@ export async function GET(request: NextRequest) {
             id::text,
             title,
             event_date::text AS date,
+            COALESCE(end_date, event_date)::text AS "endDate",
             to_char(start_time, 'HH24:MI') AS "startTime",
             COALESCE(to_char(end_time, 'HH24:MI'), '') AS "endTime",
             location,
             notes
           FROM agenda_events
-          WHERE owner_id = ${ownerId}::uuid AND event_date = ${date}::date
+          WHERE owner_id = ${ownerId}::uuid
+            AND event_date <= ${date}::date
+            AND COALESCE(end_date, event_date) >= ${date}::date
           ORDER BY start_time, created_at
         `;
     return attachOwnerCookie(NextResponse.json({ events: rows }), ownerId, Boolean(currentOwner));
@@ -105,6 +110,7 @@ export async function POST(request: NextRequest) {
     const event = {
       title: text(body.title, 160),
       date: text(body.date, 10),
+      endDate: text(body.endDate, 10) || text(body.date, 10),
       startTime: text(body.startTime, 5),
       endTime: text(body.endTime, 5),
       location: text(body.location, 240),
@@ -118,18 +124,22 @@ export async function POST(request: NextRequest) {
     if (event.endTime && !TIME_PATTERN.test(event.endTime)) {
       return NextResponse.json({ error: "O horário de término é inválido." }, { status: 400 });
     }
+    if (!isValidDate(event.endDate) || event.endDate < event.date) {
+      return NextResponse.json({ error: "A data final deve ser igual ou posterior à data inicial." }, { status: 400 });
+    }
 
     await ensureDatabaseSchema();
     const sql = getDatabase();
     const id = crypto.randomUUID();
     const rows = await sql`
       INSERT INTO agenda_events (
-        id, owner_id, title, event_date, start_time, end_time, location, notes, source_text
+        id, owner_id, title, event_date, end_date, start_time, end_time, location, notes, source_text
       ) VALUES (
         ${id}::uuid,
         ${ownerId}::uuid,
         ${event.title},
         ${event.date}::date,
+        ${event.endDate}::date,
         ${event.startTime}::time,
         ${event.endTime || null}::time,
         ${event.location},
@@ -140,6 +150,7 @@ export async function POST(request: NextRequest) {
         id::text,
         title,
         event_date::text AS date,
+        COALESCE(end_date, event_date)::text AS "endDate",
         to_char(start_time, 'HH24:MI') AS "startTime",
         COALESCE(to_char(end_time, 'HH24:MI'), '') AS "endTime",
         location,

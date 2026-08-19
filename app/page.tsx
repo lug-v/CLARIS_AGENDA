@@ -6,6 +6,7 @@ type Mode = "voice" | "photo" | "text";
 type EventDraft = {
   title: string;
   date: string;
+  endDate: string;
   startTime: string;
   endTime: string;
   location: string;
@@ -17,6 +18,7 @@ type AgendaEvent = {
   id: string;
   title: string;
   date: string;
+  endDate: string;
   startTime: string;
   endTime: string;
   location: string;
@@ -68,7 +70,7 @@ export default function Home() {
 
   const visibleDate = useMemo(() => dateFromKey(selectedDate), [selectedDate]);
   const events = useMemo(
-    () => monthEvents.filter((event) => event.date === selectedDate),
+    () => monthEvents.filter((event) => event.date <= selectedDate && (event.endDate || event.date) >= selectedDate),
     [monthEvents, selectedDate],
   );
   const calendarDays = useMemo(() => {
@@ -78,9 +80,15 @@ export default function Home() {
     gridStart.setDate(firstDay.getDate() - firstDay.getDay());
     const eventsByDate = new Map<string, AgendaEvent[]>();
     monthEvents.forEach((event) => {
-      const dayEvents = eventsByDate.get(event.date) || [];
-      dayEvents.push(event);
-      eventsByDate.set(event.date, dayEvents);
+      const lastDate = event.endDate || event.date;
+      const cursor = dateFromKey(event.date);
+      for (let dayOffset = 0; dayOffset < 370 && localDateKey(cursor) <= lastDate; dayOffset += 1) {
+        const key = localDateKey(cursor);
+        const dayEvents = eventsByDate.get(key) || [];
+        dayEvents.push(event);
+        eventsByDate.set(key, dayEvents);
+        cursor.setDate(cursor.getDate() + 1);
+      }
     });
     return Array.from({ length: 42 }, (_, index) => {
       const date = new Date(gridStart);
@@ -368,6 +376,7 @@ export default function Home() {
             <div className="review-grid">
               <label>Título<input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label>
               <label>Data<input type="date" value={draft.date} onChange={(event) => setDraft({ ...draft, date: event.target.value })} /></label>
+              <label>Data final<input type="date" min={draft.date} value={draft.endDate || draft.date} onChange={(event) => setDraft({ ...draft, endDate: event.target.value })} /></label>
               <label>Início<input type="time" value={draft.startTime} onChange={(event) => setDraft({ ...draft, startTime: event.target.value })} /></label>
               <label>Término<input type="time" value={draft.endTime} onChange={(event) => setDraft({ ...draft, endTime: event.target.value })} /></label>
               <label className="location">Local<input value={draft.location} placeholder="Opcional" onChange={(event) => setDraft({ ...draft, location: event.target.value })} /></label>
@@ -447,7 +456,10 @@ export default function Home() {
             {!eventsLoading && databaseMessage && <p className="empty-agenda error">{databaseMessage}</p>}
             {!eventsLoading && !databaseMessage && events.length === 0 && <p className="empty-agenda">Nenhum compromisso para esta data.</p>}
             {!eventsLoading && events.map((event) => {
-              const detail = [event.location, event.endTime ? `${event.startTime}–${event.endTime}` : ""].filter(Boolean).join(" · ");
+              const period = event.endDate && event.endDate !== event.date
+                ? `${dateFromKey(event.date).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })}–${dateFromKey(event.endDate).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })}`
+                : "";
+              const detail = [event.location, period, event.endTime ? `${event.startTime}–${event.endTime}` : ""].filter(Boolean).join(" · ");
               return <article key={event.id}><time>{event.startTime}</time><i className="green" /><div className="event green"><div><strong>{event.title}</strong><p>{detail || event.notes || "Compromisso salvo"}</p></div><button aria-label={`Opções de ${event.title}`}>•••</button></div></article>;
             })}
           </div>

@@ -59,11 +59,14 @@ function formatDate(value: string) {
 }
 
 function draftMessage(event: CalendarEventDraft) {
+  const dateLabel = event.endDate && event.endDate !== event.date
+    ? `${formatDate(event.date)} até ${formatDate(event.endDate)}`
+    : formatDate(event.date);
   return [
     "📅 Confira antes de agendar",
     "",
     `Título: ${event.title}`,
-    `Data: ${formatDate(event.date)}`,
+    `Data: ${dateLabel}`,
     `Horário: ${event.startTime}${event.endTime ? `–${event.endTime}` : ""}`,
     event.location ? `Local: ${event.location}` : "",
     event.notes ? `Observações: ${event.notes}` : "",
@@ -78,10 +81,10 @@ async function sendDraft(chatId: number, ownerId: string, event: CalendarEventDr
   await sql`DELETE FROM telegram_pending_events WHERE chat_id = ${chatId} AND expires_at < NOW()`;
   await sql`
     INSERT INTO telegram_pending_events (
-      id, chat_id, owner_id, title, event_date, start_time, end_time,
+      id, chat_id, owner_id, title, event_date, end_date, start_time, end_time,
       location, notes, source_text, confidence, expires_at
     ) VALUES (
-      ${id}::uuid, ${chatId}, ${ownerId}::uuid, ${event.title}, ${event.date}::date,
+      ${id}::uuid, ${chatId}, ${ownerId}::uuid, ${event.title}, ${event.date}::date, ${event.endDate}::date,
       ${event.startTime}::time, ${event.endTime || null}::time, ${event.location},
       ${event.notes}, ${event.sourceText}, ${event.confidence}, NOW() + INTERVAL '30 minutes'
     )
@@ -127,7 +130,9 @@ async function showAgenda(chatId: number, ownerId: string) {
   const events = await sql`
     SELECT title, to_char(start_time, 'HH24:MI') AS time, location
     FROM agenda_events
-    WHERE owner_id = ${ownerId}::uuid AND event_date = ${today}::date
+    WHERE owner_id = ${ownerId}::uuid
+      AND event_date <= ${today}::date
+      AND COALESCE(end_date, event_date) >= ${today}::date
     ORDER BY start_time
   `;
   if (!events.length) {
@@ -218,6 +223,7 @@ async function processCallback(callback: TelegramCallback) {
     WHERE id = ${id}::uuid AND chat_id = ${message.chat.id} AND expires_at > NOW()
     RETURNING
       owner_id::text AS "ownerId", title, event_date::text AS date,
+      COALESCE(end_date, event_date)::text AS "endDate",
       to_char(start_time, 'HH24:MI') AS "startTime",
       COALESCE(to_char(end_time, 'HH24:MI'), '') AS "endTime",
       location, notes, source_text AS "sourceText"
@@ -230,9 +236,9 @@ async function processCallback(callback: TelegramCallback) {
   const event = pending[0];
   await sql`
     INSERT INTO agenda_events (
-      id, owner_id, title, event_date, start_time, end_time, location, notes, source_text
+      id, owner_id, title, event_date, end_date, start_time, end_time, location, notes, source_text
     ) VALUES (
-      ${crypto.randomUUID()}::uuid, ${event.ownerId}::uuid, ${event.title}, ${event.date}::date,
+      ${crypto.randomUUID()}::uuid, ${event.ownerId}::uuid, ${event.title}, ${event.date}::date, ${event.endDate}::date,
       ${event.startTime}::time, ${event.endTime || null}::time, ${event.location},
       ${event.notes}, ${event.sourceText}
     )
@@ -240,7 +246,7 @@ async function processCallback(callback: TelegramCallback) {
   await editTelegramMessage(
     message.chat.id,
     message.message_id,
-    `✅ Compromisso salvo!\n\n${event.title}\n${formatDate(String(event.date))} · ${event.startTime}${event.endTime ? `–${event.endTime}` : ""}`,
+    `✅ Compromisso salvo!\n\n${event.title}\n${formatDate(String(event.date))}${event.endDate !== event.date ? ` até ${formatDate(String(event.endDate))}` : ""} · ${event.startTime}${event.endTime ? `–${event.endTime}` : ""}`,
   );
 }
 
