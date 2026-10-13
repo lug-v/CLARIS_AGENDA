@@ -1,0 +1,26 @@
+# Dispara os lembretes da Clari a cada 15 minutos.
+# O plano Hobby da Vercel só roda Cron uma vez por dia; o GitHub Actions é gratuito
+# para repositórios públicos. Configure em Settings → Secrets and variables → Actions:
+#   APP_URL      → https://claris-agenda.vercel.app
+#   CRON_SECRET  → o mesmo valor definido na Vercel
+name: Lembretes da Clari
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+jobs:
+  reminders:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Chamar a rota de lembretes
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$APP_URL" ] || [ -z "$CRON_SECRET" ]; then
+            echo "Configure os secrets APP_URL e CRON_SECRET."; exit 1
+          fi
+          curl --fail-with-body -sS -H "Authorization: Bearer $CRON_SECRET" "${APP_URL%/}/api/cron/reminders"

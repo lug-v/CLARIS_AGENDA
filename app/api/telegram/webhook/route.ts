@@ -1,6 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import { ensureDatabaseSchema, getDatabase } from "@/lib/db";
-import { CalendarEventDraft, interpretImageEvents, interpretText, transcribeAudio } from "@/lib/groq";
+import { CalendarEventDraft, interpretImageEvents, interpretTextEvents, transcribeAudio } from "@/lib/groq";
 import { findCalendarConflicts } from "@/lib/calendar";
 import { scheduleDefaultReminders } from "@/lib/automations";
 import { AgendaRange, detectAgendaQuery } from "@/lib/agenda-query";
@@ -199,13 +199,13 @@ async function processMessage(message: TelegramMessage) {
       await showAgenda(message.chat.id, ownerId, voiceQuery);
       return;
     }
-    events = [await interpretText(transcript)];
+    events = await interpretTextEvents(transcript);
   } else if (message.photo?.length) {
     const photo = message.photo[message.photo.length - 1];
     const image = await telegramFileAsDataUrl(photo.file_id);
     events = await interpretImageEvents(image, message.caption || "Compromissos extraídos de uma foto enviada pelo Telegram");
   } else if (text && !text.startsWith("/")) {
-    events = [await interpretText(text)];
+    events = await interpretTextEvents(text);
   } else {
     await sendTelegramMessage(message.chat.id, "Envie um compromisso por texto, áudio ou foto. Use /ajuda para ver as opções.");
     return;

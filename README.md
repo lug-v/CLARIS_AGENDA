@@ -31,7 +31,12 @@ Crie `.env.local` usando `.env.example` como referência:
 ```env
 GROQ_API_KEY=sua_chave_da_groq
 DATABASE_URL=postgresql://usuario:senha@host/neondb?sslmode=require
+# Opcionais
+GROQ_MODEL=qwen/qwen3.8-27b
+ANALYZE_HOURLY_LIMIT=60
 ```
+
+`GROQ_MODEL` permite trocar o modelo sem alterar o código quando o Groq desativar um modelo. `ANALYZE_HOURLY_LIMIT` limita quantas interpretações cada agenda pode pedir por hora.
 
 Inicie o projeto:
 
@@ -63,6 +68,16 @@ npm run telegram:setup
 ```
 
 Na Clari, gere um link temporário para vincular a conversa. O bot aceita texto, áudio e foto, mostra os dados interpretados e só salva após a confirmação do usuário. O comando `/agenda` lista os compromissos do dia.
+
+## Lembretes
+
+O resumo diário roda pelo Cron da Vercel. Os lembretes (24 h e 1 h antes) rodam pelo GitHub Actions a cada 15 minutos, em `.github/workflows/reminders.yml`. Cadastre os secrets `APP_URL` e `CRON_SECRET` no repositório para ativá-los.
+
+## Testes
+
+```bash
+npm test
+```
 
 ## Tecnologias
 

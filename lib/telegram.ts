@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 type TelegramApiResponse<T> = {
   ok: boolean;
   result?: T;
@@ -99,4 +101,3 @@ export async function telegramFileAsDataUrl(fileId: string) {
   const base64 = Buffer.from(await file.arrayBuffer()).toString("base64");
   return `data:${file.type};base64,${base64}`;
 }
-import { createHash } from "node:crypto";

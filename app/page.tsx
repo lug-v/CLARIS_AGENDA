@@ -53,6 +53,32 @@ async function requestEvents(date: string): Promise<AgendaEvent[]> {
   return data.events;
 }
 
+// A Vercel aceita no máximo ~4,5 MB por requisição. Reduzir a foto no aparelho
+// evita falhas com fotos de celular e deixa a leitura pela IA mais rápida.
+async function compressImage(file: File, maxSide = 1600, quality = 0.85) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const element = new Image();
+      element.onload = () => resolve(element);
+      element.onerror = reject;
+      element.src = url;
+    });
+    const scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(img.naturalWidth * scale);
+    canvas.height = Math.round(img.naturalHeight * scale);
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("CANVAS_UNAVAILABLE");
+    context.fillStyle = "#fff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(img, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/jpeg", quality);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 export default function Home() {
   const today = useMemo(() => localDateKey(new Date()), []);
   const [selectedDate, setSelectedDate] = useState(today);
@@ -220,16 +246,17 @@ export default function Home() {
   async function analyzePhoto(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
-    if (file.size > 10 * 1024 * 1024) {
-      setMessage("A imagem deve ter até 10 MB.");
+    if (file.size > 20 * 1024 * 1024) {
+      setMessage("A imagem deve ter até 20 MB.");
       return;
     }
-    const image = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result));
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
+    let image: string;
+    try {
+      image = await compressImage(file);
+    } catch {
+      setMessage("Não consegui ler esta imagem. Tente outra foto ou um print.");
+      return;
+    }
     void analyze(JSON.stringify({ type: "image", image }), { "Content-Type": "application/json" });
   }
 
@@ -424,7 +451,7 @@ export default function Home() {
           <div className={`capture-box ${loading ? "is-loading" : ""}`}>
             {loading && <div className="loading"><span>✦</span><div><strong>Analisando com a Groq...</strong><p>Identificando data, horário e compromisso</p></div></div>}
             {!loading && mode === "voice" && <><button className={`mic ${listening ? "listening" : ""}`} onClick={toggleRecording} aria-label={listening ? "Parar gravação" : "Gravar compromisso"}>●</button><div><strong>{listening ? "Gravando — toque para terminar" : "Toque para começar a falar"}</strong><p>{listening ? "Fale naturalmente" : "Ex: “Dentista amanhã às três da tarde”"}</p></div></>}
-            {!loading && mode === "photo" && <label className="upload"><input type="file" accept="image/*" onChange={analyzePhoto} /><span>▣</span><div><strong>Escolha uma foto da agenda</strong><p>Foto, print ou página escrita à mão · até 10 MB</p></div></label>}
+            {!loading && mode === "photo" && <label className="upload"><input type="file" accept="image/*" onChange={analyzePhoto} /><span>▣</span><div><strong>Escolha uma foto da agenda</strong><p>Foto, print ou página escrita à mão · até 20 MB</p></div></label>}
             {!loading && mode === "text" && <><textarea value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) analyzeText(); }} aria-label="Descreva o compromisso" placeholder="Ex: Reunião com a Ana sexta às 10h, por uma hora..." /><button className="send" onClick={analyzeText} aria-label="Interpretar compromisso">➜</button></>}
           </div>
           {message && <p className={message.includes("salv") || message.includes("excluído") ? "notice success" : "notice"}>{message}</p>}

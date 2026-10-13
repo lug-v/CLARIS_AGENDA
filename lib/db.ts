@@ -134,6 +134,15 @@ export function ensureDatabaseSchema() {
           UNIQUE (owner_id, kind, delivery_date)
         )
       `;
+      await sql`
+        CREATE TABLE IF NOT EXISTS analyze_usage (
+          owner_id UUID NOT NULL,
+          window_start TIMESTAMPTZ NOT NULL,
+          requests INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (owner_id, window_start)
+        )
+      `;
+      await sql`DELETE FROM analyze_usage WHERE window_start < NOW() - INTERVAL '2 days'`;
     })().catch((error) => {
       schemaReady = null;
       throw error;
