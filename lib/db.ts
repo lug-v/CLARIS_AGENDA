@@ -143,6 +143,39 @@ export function ensureDatabaseSchema() {
         )
       `;
       await sql`DELETE FROM analyze_usage WHERE window_start < NOW() - INTERVAL '2 days'`;
+      // Módulo de gastos. Colunas simples e tipadas para facilitar a análise em Python (pandas).
+      await sql`
+        CREATE TABLE IF NOT EXISTS expenses (
+          id UUID PRIMARY KEY,
+          owner_id UUID NOT NULL,
+          amount NUMERIC(12, 2) NOT NULL CHECK (amount > 0),
+          spent_on DATE NOT NULL,
+          merchant VARCHAR(160) NOT NULL DEFAULT '',
+          description VARCHAR(240) NOT NULL DEFAULT '',
+          category VARCHAR(40) NOT NULL DEFAULT 'Outros',
+          payment_method VARCHAR(24) NOT NULL DEFAULT 'não informado',
+          items JSONB NOT NULL DEFAULT '[]'::jsonb,
+          source VARCHAR(16) NOT NULL DEFAULT 'texto',
+          source_text TEXT NOT NULL DEFAULT '',
+          confidence DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `;
+      await sql`
+        CREATE INDEX IF NOT EXISTS expenses_owner_date_idx
+        ON expenses (owner_id, spent_on)
+      `;
+      await sql`
+        CREATE TABLE IF NOT EXISTS telegram_pending_expenses (
+          id UUID PRIMARY KEY,
+          chat_id BIGINT NOT NULL,
+          owner_id UUID NOT NULL,
+          source VARCHAR(16) NOT NULL DEFAULT 'texto',
+          payload JSONB NOT NULL,
+          expires_at TIMESTAMPTZ NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `;
     })().catch((error) => {
       schemaReady = null;
       throw error;

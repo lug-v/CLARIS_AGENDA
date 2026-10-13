@@ -5,6 +5,25 @@ import { findCalendarConflicts } from "@/lib/calendar";
 import { scheduleDefaultReminders } from "@/lib/automations";
 import { AgendaRange, detectAgendaQuery } from "@/lib/agenda-query";
 import { expandRecurrence, normalizeRecurrence, recurrenceLabel } from "@/lib/recurrence";
+import { todayInSaoPaulo } from "@/lib/agenda-query";
+import {
+  detectExpenseIntent,
+  detectExpenseQuery,
+  ExpenseDraft,
+  formatBRL,
+  formatDateBR,
+  stripExpenseCommand,
+} from "@/lib/expense-core";
+import {
+  buildMonthSummary,
+  cancelPendingExpense,
+  confirmPendingExpense,
+  deleteExpense,
+  ExpenseSource,
+  interpretExpenseText,
+  interpretReceiptImage,
+  savePendingExpense,
+} from "@/lib/expenses";
 import {
   answerTelegramCallback,
   downloadTelegramFile,
@@ -154,6 +173,40 @@ async function showAgenda(chatId: number, ownerId: string, range: AgendaRange) {
   await sendTelegramMessage(chatId, [`📆 Sua agenda ${range.label}`, "", ...lines].join("\n"));
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function expenseDraftMessage(expense: ExpenseDraft) {
+  return [
+    "💰 Confira o gasto antes de registrar",
+    "",
+    `Valor: ${formatBRL(expense.amount)}`,
+    `Data: ${formatDateBR(expense.date)}`,
+    expense.merchant ? `Onde: ${expense.merchant}` : "",
+    expense.description ? `O quê: ${expense.description}` : "",
+    `Categoria: ${expense.category}`,
+    `Pagamento: ${expense.paymentMethod}`,
+    expense.items.length ? `Itens lidos: ${expense.items.length}` : "",
+    "",
+    `Confiança: ${Math.round(expense.confidence * 100)}%`,
+  ].filter((line, index, lines) => line !== "" || lines[index - 1] !== "").join("\n");
+}
+
+async function sendExpenseDrafts(chatId: number, ownerId: string, expenses: ExpenseDraft[], source: ExpenseSource) {
+  if (!expenses.length) {
+    await sendTelegramMessage(chatId, "Não encontrei o valor do gasto. Tente algo como “gastei 45,90 no mercado no Pix”.");
+    return;
+  }
+  for (const expense of expenses) {
+    const id = await savePendingExpense(chatId, ownerId, expense, source);
+    await sendTelegramMessage(chatId, expenseDraftMessage(expense), {
+      inline_keyboard: [[
+        { text: "✅ Registrar", callback_data: `econfirm:${id}` },
+        { text: "❌ Cancelar", callback_data: `ecancel:${id}` },
+      ]],
+    });
+  }
+}
+
 async function processMessage(message: TelegramMessage) {
   if (message.chat.type !== "private") return;
   const text = message.text?.trim() || "";
@@ -179,13 +232,23 @@ async function processMessage(message: TelegramMessage) {
   }
   const ownerId = String(connections[0].ownerId);
 
+  const expenseQuery = detectExpenseQuery(text, todayInSaoPaulo());
+  if (expenseQuery) {
+    await sendTelegramMessage(message.chat.id, await buildMonthSummary(ownerId, expenseQuery));
+    return;
+  }
   const textQuery = detectAgendaQuery(text);
   if (textQuery) {
     await showAgenda(message.chat.id, ownerId, textQuery);
     return;
   }
   if (text === "/ajuda") {
-    await sendTelegramMessage(message.chat.id, "Envie texto, áudio ou foto de uma agenda. Pergunte “o que tenho amanhã?” ou use /agenda, /agenda amanhã e /agenda semana que vem.");
+    await sendTelegramMessage(message.chat.id, [
+      "📅 Agenda: envie texto, áudio ou foto de um compromisso. Pergunte “o que tenho amanhã?” ou use /agenda.",
+      "",
+      "💰 Gastos: diga “gastei 45 no mercado no Pix”, use /gasto ou envie a foto da nota fiscal.",
+      "Veja o resumo com /gastos, “/gastos mês passado” ou “quanto gastei em setembro?”.",
+    ].join("\n"));
     return;
   }
 
@@ -194,23 +257,86 @@ async function processMessage(message: TelegramMessage) {
   if (message.voice) {
     const audio = await downloadTelegramFile(message.voice.file_id, "compromisso.ogg");
     const transcript = await transcribeAudio(audio);
+    const voiceExpenseQuery = detectExpenseQuery(transcript, todayInSaoPaulo());
+    if (voiceExpenseQuery) {
+      await sendTelegramMessage(message.chat.id, await buildMonthSummary(ownerId, voiceExpenseQuery));
+      return;
+    }
     const voiceQuery = detectAgendaQuery(transcript);
     if (voiceQuery) {
       await showAgenda(message.chat.id, ownerId, voiceQuery);
+      return;
+    }
+    if (detectExpenseIntent(transcript)) {
+      await sendExpenseDrafts(message.chat.id, ownerId, await interpretExpenseText(transcript), "audio");
       return;
     }
     events = await interpretTextEvents(transcript);
   } else if (message.photo?.length) {
     const photo = message.photo[message.photo.length - 1];
     const image = await telegramFileAsDataUrl(photo.file_id);
+    // Primeiro verifica se é nota/comprovante; se não for, segue como agenda.
+    const reading = await interpretReceiptImage(image, message.caption || "");
+    if (reading.kind === "receipt") {
+      await sendExpenseDrafts(message.chat.id, ownerId, [reading.expense], "foto");
+      return;
+    }
     events = await interpretImageEvents(image, message.caption || "Compromissos extraídos de uma foto enviada pelo Telegram");
+  } else if (text && detectExpenseIntent(text)) {
+    const content = stripExpenseCommand(text);
+    if (!content) {
+      await sendTelegramMessage(message.chat.id, "Descreva o gasto depois do comando, por exemplo: /gasto 32,50 almoço no débito.");
+      return;
+    }
+    await sendExpenseDrafts(message.chat.id, ownerId, await interpretExpenseText(content), "texto");
+    return;
   } else if (text && !text.startsWith("/")) {
     events = await interpretTextEvents(text);
   } else {
-    await sendTelegramMessage(message.chat.id, "Envie um compromisso por texto, áudio ou foto. Use /ajuda para ver as opções.");
+    await sendTelegramMessage(message.chat.id, "Envie um compromisso ou um gasto por texto, áudio ou foto. Use /ajuda para ver as opções.");
     return;
   }
   for (const event of events) await sendDraft(message.chat.id, ownerId, event);
+}
+
+async function processExpenseCallback(callback: TelegramCallback, message: TelegramMessage, action: string, id: string) {
+  if (!UUID_PATTERN.test(id)) {
+    await answerTelegramCallback(callback.id);
+    return;
+  }
+  if (action === "ecancel") {
+    await cancelPendingExpense(id, message.chat.id);
+    await answerTelegramCallback(callback.id, "Cancelado");
+    await editTelegramMessage(message.chat.id, message.message_id, "❌ Gasto não registrado.");
+    return;
+  }
+  if (action === "econfirm") {
+    await answerTelegramCallback(callback.id, "Registrando...");
+    const saved = await confirmPendingExpense(id, message.chat.id);
+    if (!saved) {
+      await editTelegramMessage(message.chat.id, message.message_id, "Este gasto expirou ou já foi processado.");
+      return;
+    }
+    const { expense, expenseId } = saved;
+    await editTelegramMessage(
+      message.chat.id,
+      message.message_id,
+      `✅ Gasto registrado!\n\n${formatBRL(expense.amount)} · ${expense.category}\n${formatDateBR(expense.date)}${expense.merchant ? ` · ${expense.merchant}` : ""}`,
+      { inline_keyboard: [[{ text: "↩️ Desfazer", callback_data: `eundo:${expenseId}` }]] },
+    );
+    return;
+  }
+  if (action === "eundo") {
+    const sql = getDatabase();
+    const connections = await sql`
+      SELECT owner_id::text AS "ownerId" FROM telegram_connections WHERE chat_id = ${message.chat.id}
+    `;
+    const removed = connections[0] ? await deleteExpense(id, String(connections[0].ownerId)) : false;
+    await answerTelegramCallback(callback.id, removed ? "Desfeito" : "Já removido");
+    await editTelegramMessage(message.chat.id, message.message_id, removed ? "↩️ Gasto removido." : "Este gasto já tinha sido removido.");
+    return;
+  }
+  await answerTelegramCallback(callback.id);
 }
 
 async function processCallback(callback: TelegramCallback) {
@@ -221,6 +347,10 @@ async function processCallback(callback: TelegramCallback) {
     return;
   }
   const [action, id] = data.split(":", 2);
+  if (["econfirm", "ecancel", "eundo"].includes(action)) {
+    await processExpenseCallback(callback, message, action, id);
+    return;
+  }
   const sql = getDatabase();
 
   if (action === "cancel") {

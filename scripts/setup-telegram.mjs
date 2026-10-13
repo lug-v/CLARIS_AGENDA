@@ -28,6 +28,8 @@ await api("setWebhook", {
 await api("setMyCommands", {
   commands: [
     { command: "agenda", description: "Ver os compromissos de hoje" },
+    { command: "gasto", description: "Registrar um gasto (ex.: /gasto 32,50 almoço)" },
+    { command: "gastos", description: "Resumo de gastos do mês" },
     { command: "ajuda", description: "Ver como usar a Clari" },
   ],
 });

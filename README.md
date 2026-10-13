@@ -69,6 +69,10 @@ npm run telegram:setup
 
 Na Clari, gere um link temporário para vincular a conversa. O bot aceita texto, áudio e foto, mostra os dados interpretados e só salva após a confirmação do usuário. O comando `/agenda` lista os compromissos do dia.
 
+## Gastos
+
+Pelo Telegram, registre gastos por texto (“gastei 45 no mercado no Pix”), áudio ou foto da nota fiscal, e consulte o resumo com `/gastos`. Detalhes e estrutura dos dados em [docs/GASTOS.md](docs/GASTOS.md).
+
 ## Lembretes
 
 O resumo diário roda pelo Cron da Vercel. Os lembretes (24 h e 1 h antes) rodam pelo GitHub Actions a cada 15 minutos, em `.github/workflows/reminders.yml`. Cadastre os secrets `APP_URL` e `CRON_SECRET` no repositório para ativá-los.

@@ -3,7 +3,7 @@ import { normalizeRecurrence, RecurrenceRule } from "@/lib/recurrence";
 const GROQ_URL = "https://api.groq.com/openai/v1";
 // qwen/qwen3.6-27b foi desligado pelo Groq em 14/09/2026. O modelo fica configurável
 // pela variável GROQ_MODEL para que a próxima troca não exija alteração no código.
-const GROQ_MODEL = process.env.GROQ_MODEL || "qwen/qwen3.8-27b";
+export const GROQ_MODEL = process.env.GROQ_MODEL || "qwen/qwen3.8-27b";
 const MAX_EVENTS = 10;
 
 export type CalendarEventDraft = RecurrenceRule & {
@@ -41,7 +41,7 @@ const recurrenceRules = `
 - recurrenceUntil é YYYY-MM-DD quando houver uma data final explícita; caso contrário use string vazia.
 - recurrenceCount é o número total de ocorrências. Quando não for informado, use 12. Nunca ultrapasse 52.`;
 
-function todayInSaoPaulo() {
+export function todayInSaoPaulo() {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/Sao_Paulo",
     year: "numeric",
@@ -87,14 +87,14 @@ function relativeWeekRange(sourceText: string, today: string) {
   return { date: localDateKey(start), endDate: localDateKey(end) };
 }
 
-function weekdayInSaoPaulo() {
+export function weekdayInSaoPaulo() {
   return new Intl.DateTimeFormat("pt-BR", {
     timeZone: "America/Sao_Paulo",
     weekday: "long",
   }).format(new Date());
 }
 
-async function groq(path: string, init: RequestInit) {
+export async function groq(path: string, init: RequestInit) {
   const key = process.env.GROQ_API_KEY;
   if (!key) throw new Error("GROQ_API_KEY_NOT_CONFIGURED");
   const response = await fetch(`${GROQ_URL}${path}`, {
