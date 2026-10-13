@@ -10,8 +10,8 @@
     "build": "next build",
     "start": "next start",
     "telegram:setup": "node --env-file=.env.local scripts/setup-telegram.mjs",
-    "test": "next build",
-    "test:unit": "node --experimental-strip-types --test tests/recurrence.test.ts tests/agenda-query.test.ts",
+    "test": "npm run test:unit && npm run lint",
+    "test:unit": "node --experimental-strip-types --test tests/recurrence.test.ts tests/agenda-query.test.ts tests/expense-core.test.ts",
     "lint": "eslint . --ignore-pattern .next"
   },
   "dependencies": {

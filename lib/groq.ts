@@ -1,6 +1,10 @@
 import { normalizeRecurrence, RecurrenceRule } from "@/lib/recurrence";
 
 const GROQ_URL = "https://api.groq.com/openai/v1";
+// qwen/qwen3.6-27b foi desligado pelo Groq em 14/09/2026. O modelo fica configurável
+// pela variável GROQ_MODEL para que a próxima troca não exija alteração no código.
+export const GROQ_MODEL = process.env.GROQ_MODEL || "qwen/qwen3.8-27b";
+const MAX_EVENTS = 10;
 
 export type CalendarEventDraft = RecurrenceRule & {
   title: string;
@@ -25,9 +29,9 @@ const eventFieldRules = `Cada compromisso usa exatamente: title, date, endDate, 
 - location contém apenas o local explicitamente informado. Não invente local.
 - notes pode explicar o período ou informações adicionais sem repetir título, data e local.
 - confidence deve ser um número de 0 a 1. Reduza apenas quando houver ambiguidade real.
-- sourceText deve repetir o pedido recebido.`;
+- sourceText deve conter apenas o trecho do pedido que originou aquele compromisso.`;
 
-const systemPrompt = `Você transforma pedidos em compromissos de calendário em português do Brasil. Responda APENAS um objeto JSON válido. ${eventFieldRules}`;
+const systemPrompt = `Você transforma pedidos em compromissos de calendário em português do Brasil. Responda APENAS JSON válido no formato {"events": [...]}. Se o pedido citar mais de um compromisso, crie um item para cada um, no máximo ${MAX_EVENTS}. Não invente compromissos. ${eventFieldRules}`;
 
 const recurrenceRules = `
 - recurrence deve ser none, daily, weekly ou monthly.
@@ -37,7 +41,7 @@ const recurrenceRules = `
 - recurrenceUntil é YYYY-MM-DD quando houver uma data final explícita; caso contrário use string vazia.
 - recurrenceCount é o número total de ocorrências. Quando não for informado, use 12. Nunca ultrapasse 52.`;
 
-function todayInSaoPaulo() {
+export function todayInSaoPaulo() {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/Sao_Paulo",
     year: "numeric",
@@ -83,14 +87,14 @@ function relativeWeekRange(sourceText: string, today: string) {
   return { date: localDateKey(start), endDate: localDateKey(end) };
 }
 
-function weekdayInSaoPaulo() {
+export function weekdayInSaoPaulo() {
   return new Intl.DateTimeFormat("pt-BR", {
     timeZone: "America/Sao_Paulo",
     weekday: "long",
   }).format(new Date());
 }
 
-async function groq(path: string, init: RequestInit) {
+export async function groq(path: string, init: RequestInit) {
   const key = process.env.GROQ_API_KEY;
   if (!key) throw new Error("GROQ_API_KEY_NOT_CONFIGURED");
   const response = await fetch(`${GROQ_URL}${path}`, {
@@ -126,25 +130,45 @@ function normalizeEvent(value: Record<string, unknown>, sourceText: string): Cal
   };
 }
 
-export async function interpretText(text: string): Promise<CalendarEventDraft> {
+function parseEvents(result: { choices?: Array<{ message?: { content?: string } }> }) {
+  let parsed: { events?: unknown } & Record<string, unknown>;
+  try {
+    parsed = JSON.parse(result.choices?.[0]?.message?.content || "{}");
+  } catch {
+    throw new Error("GROQ_INVALID_JSON");
+  }
+  // Aceita tanto {"events": [...]} quanto um objeto único, por segurança.
+  const list = Array.isArray(parsed.events) ? parsed.events : parsed.title ? [parsed] : [];
+  return list
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+    .slice(0, MAX_EVENTS);
+}
+
+export async function interpretTextEvents(text: string): Promise<CalendarEventDraft[]> {
   const today = todayInSaoPaulo();
   const result = await groq("/chat/completions", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: "qwen/qwen3.6-27b",
+      model: GROQ_MODEL,
       response_format: { type: "json_object" },
       reasoning_effort: "none",
-      max_completion_tokens: 1024,
-      temperature: 0.2,
+      max_completion_tokens: 2048,
+      temperature: 0.1,
       messages: [
         { role: "system", content: `${systemPrompt}${recurrenceRules}` },
         { role: "user", content: `Hoje é ${today} (${weekdayInSaoPaulo()}). Verifique se cada data corresponde ao dia da semana mencionado. Pedido: ${text}` },
       ],
     }),
   });
-  const parsed = JSON.parse(result.choices?.[0]?.message?.content || "{}") as Record<string, unknown>;
-  return normalizeEvent(parsed, text);
+  const events = parseEvents(result);
+  if (!events.length) return [normalizeEvent({}, text)];
+  // O ajuste determinístico de "semana que vem" só vale quando há um único compromisso.
+  return events.map((event) => normalizeEvent(event, events.length === 1 ? text : String(event.sourceText || text)));
+}
+
+export async function interpretText(text: string): Promise<CalendarEventDraft> {
+  return (await interpretTextEvents(text))[0];
 }
 
 export async function transcribeAudio(file: File) {
@@ -163,11 +187,11 @@ export async function interpretImageEvents(image: string, sourceText = "Compromi
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: "qwen/qwen3.6-27b",
+      model: GROQ_MODEL,
       response_format: { type: "json_object" },
       reasoning_effort: "none",
-      max_completion_tokens: 1024,
-      temperature: 0.2,
+      max_completion_tokens: 2048,
+      temperature: 0.1,
       messages: [
         { role: "system", content: `Você lê agendas, convites, prints e anotações em português do Brasil. Responda APENAS JSON no formato {"events": [...]}. Extraia todos os compromissos legíveis, no máximo 10. Não invente informações. ${eventFieldRules}${recurrenceRules}` },
         {
@@ -180,8 +204,7 @@ export async function interpretImageEvents(image: string, sourceText = "Compromi
       ],
     }),
   });
-  const parsed = JSON.parse(result.choices?.[0]?.message?.content || "{}") as { events?: Record<string, unknown>[] };
-  const events = Array.isArray(parsed.events) ? parsed.events.slice(0, 10) : [];
+  const events = parseEvents(result);
   if (!events.length) throw new Error("IMAGE_WITHOUT_EVENTS");
   return events.map((event) => normalizeEvent(event, sourceText));
 }

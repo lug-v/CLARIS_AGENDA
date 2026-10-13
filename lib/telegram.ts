@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 type TelegramApiResponse<T> = {
   ok: boolean;
   result?: T;
@@ -51,6 +53,8 @@ export async function ensureTelegramWebhook(origin: string) {
   await telegramRequest("setMyCommands", {
     commands: [
       { command: "agenda", description: "Consultar hoje, amanhã ou a próxima semana" },
+      { command: "gasto", description: "Registrar um gasto (ex.: /gasto 32,50 almoço)" },
+      { command: "gastos", description: "Resumo de gastos do mês" },
       { command: "ajuda", description: "Ver como usar a Clari" },
     ],
   });
@@ -68,8 +72,18 @@ export async function sendTelegramMessage(
   });
 }
 
-export async function editTelegramMessage(chatId: string | number, messageId: number, text: string) {
-  return telegramRequest("editMessageText", { chat_id: chatId, message_id: messageId, text });
+export async function editTelegramMessage(
+  chatId: string | number,
+  messageId: number,
+  text: string,
+  replyMarkup?: Record<string, unknown>,
+) {
+  return telegramRequest("editMessageText", {
+    chat_id: chatId,
+    message_id: messageId,
+    text,
+    ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+  });
 }
 
 export async function answerTelegramCallback(callbackQueryId: string, text?: string) {
@@ -99,4 +113,3 @@ export async function telegramFileAsDataUrl(fileId: string) {
   const base64 = Buffer.from(await file.arrayBuffer()).toString("base64");
   return `data:${file.type};base64,${base64}`;
 }
-import { createHash } from "node:crypto";
